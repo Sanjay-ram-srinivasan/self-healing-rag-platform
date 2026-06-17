@@ -1,0 +1,17 @@
+fastapi
+fastapi
+uvicorn
+langchain
+langgraph
+langchain-community
+langchain-groq
+chromadb
+sentence-transformers
+pypdf
+python-multipart
+python-dotenv
+firebase-admin
+pytesseract
+pdf2image
+Pillow
+duckduckgo-search

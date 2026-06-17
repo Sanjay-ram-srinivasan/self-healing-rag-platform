@@ -1,0 +1,16 @@
+{
+  "ZDoCBPRfdYRYiGliXXxa2Rs4nv82": {
+    "selfHealingMode": true,
+    "confidenceThreshold": 50,
+    "maxRetryAttempts": 3,
+    "showSources": true,
+    "topKRetrieval": 5,
+    "similarityThreshold": 0.5,
+    "queryRewrite": true,
+    "criticAgent": true,
+    "verificationAgent": true,
+    "defaultCollection": "all",
+    "autoIndex": true,
+    "ocrEnabled": true
+  }
+}

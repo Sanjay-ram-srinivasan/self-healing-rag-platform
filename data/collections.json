@@ -1,0 +1,19 @@
+{
+  "collections": [
+    {
+      "id": "506a4d26-f137-476e-af4f-1a9237175374",
+      "name": "AI Notes",
+      "user_id": "system"
+    },
+    {
+      "id": "42329bdc-1c20-4c8c-bce0-346b5122e672",
+      "name": "Research Papers",
+      "user_id": "system"
+    },
+    {
+      "id": "7ce5cd6c-f911-4519-8b86-aa183cd20bee",
+      "name": "College Documents",
+      "user_id": "system"
+    }
+  ]
+}

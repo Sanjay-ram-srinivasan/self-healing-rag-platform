@@ -1,0 +1,25 @@
+{
+  "python_tutorial.pdf": {
+    "pages": 7,
+    "chunks": 10,
+    "collection_id": null,
+    "ocr_used": false,
+    "user_id": "ZDoCBPRfdYRYiGliXXxa2Rs4nv82"
+  },
+  "Introduction to Database Management Systems.pdf": {
+    "pages": 3,
+    "chunks": 3,
+    "collection_id": null,
+    "ocr_used": false,
+    "user_id": "ZDoCBPRfdYRYiGliXXxa2Rs4nv82"
+  },
+  "Module1.pptx": {
+    "pages": 1,
+    "chunks": 17,
+    "collection_id": null,
+    "ocr_used": false,
+    "user_id": "ZDoCBPRfdYRYiGliXXxa2Rs4nv82",
+    "status": "indexed",
+    "reindexed_at": "2026-06-17 19:46:04"
+  }
+}

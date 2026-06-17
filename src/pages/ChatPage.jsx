@@ -1,0 +1,436 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BarChart3,
+  Bot,
+  CheckCircle2,
+  FileText,
+  HelpCircle,
+  Loader2,
+  LogOut,
+  MessageSquare,
+  Settings,
+  Upload,
+  SendHorizontal,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Plus,
+} from "lucide-react";
+import { useAuth } from "../context/AuthContext.jsx";
+import { askQuestion, fetchChats, createChat, fetchChat, deleteChat, fetchCollections, uploadDocument, fetchDocuments } from "../services/api.js";
+import StatusPill from "../components/StatusPill.jsx";
+
+const workflowBase = [
+  { label: "Question Received", detail: "Timestamp captured", state: "done" },
+  { label: "Vector Retrieval", detail: "ChromaDB semantic search", state: "done" },
+  { label: "Answer Gen", detail: "LLM generation step", state: "done" },
+  { label: "Verification Agent", detail: "Checking hallucination status", state: "active" },
+  { label: "Critic Agent", detail: "Context repair if needed", state: "pending" },
+];
+
+export default function ChatPage({ currentChatId, setCurrentChatId }) {
+  const chatInputRef = useRef(null);
+  const [question, setQuestion] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  
+  const { user, logout } = useAuth();
+  const fileInputRef = React.useRef(null);
+  const [uploading, setUploading] = useState(false);
+  
+  const [chats, setChats] = useState([]);
+  const [chatsLoading, setChatsLoading] = useState(false);
+  
+  const [collections, setCollections] = useState([]);
+  const [selectedCollection, setSelectedCollection] = useState("all");
+
+  const lastResponse = useMemo(() => [...messages].reverse().find((item) => item.type === "answer"), [messages]);
+  const exampleQuestions = ["What can you help me with?", "Summarize my documents.", "How does this platform verify answers?"];
+
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        chatInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    loadCollections();
+    loadChats();
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+
+  const loadCollections = async () => {
+    try {
+      const data = await fetchCollections();
+      setCollections(data.collections || []);
+    } catch (err) {
+      console.error("Failed to load collections", err);
+    }
+  };
+
+  const loadChats = async () => {
+    setChatsLoading(true);
+    try {
+      const data = await fetchChats();
+      setChats(data.chats || []);
+    } catch (err) {
+      console.error("Failed to load chats", err);
+    } finally {
+      setChatsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentChatId) {
+      setMessages([]);
+      return;
+    }
+    const loadCurrentChat = async () => {
+      try {
+        const chat = await fetchChat(currentChatId);
+        setMessages(chat.messages || []);
+      } catch (err) {
+        console.error("Failed to load chat", err);
+      }
+    };
+    loadCurrentChat();
+  }, [currentChatId]);
+
+  const handleDeleteChat = async (id) => {
+    try {
+      await deleteChat(id);
+      setChats((current) => current.filter((c) => c.chat_id !== id));
+      if (currentChatId === id) {
+        setCurrentChatId(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete chat", err);
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of files) {
+        await uploadDocument(file, selectedCollection === "all" ? null : selectedCollection);
+      }
+    } catch (err) {
+      console.error('Upload failed', err);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const cleanQuestion = question.trim();
+    if (!cleanQuestion || loading) return;
+
+    let targetChatId = currentChatId;
+    if (!targetChatId) {
+       try {
+         const newChat = await createChat(cleanQuestion.slice(0, 30) + (cleanQuestion.length > 30 ? "..." : ""));
+         targetChatId = newChat.chat_id;
+         setCurrentChatId(targetChatId);
+         setChats(curr => [newChat, ...curr]);
+       } catch (err) {
+         setError("Failed to create new chat session.");
+         return;
+       }
+    }
+
+    setMessages((current) => [...current, { type: "question", text: cleanQuestion, id: crypto.randomUUID() }]);
+    setQuestion("");
+    setLoading(true);
+    setError("");
+
+    try {
+      const result = await askQuestion({ 
+          question: cleanQuestion, 
+          collection_id: selectedCollection === "all" ? null : selectedCollection,
+          chat_id: targetChatId 
+      });
+      setMessages((current) => [
+        ...current,
+        {
+          type: "answer",
+          id: crypto.randomUUID(),
+          text: result.answer || "No answer was returned.",
+          confidence: Number(result.confidence || result.verification_score || 0),
+          grounded: Boolean(result.grounded),
+          status: result.status || (result.grounded ? "verified" : "insufficient_context"),
+          queryType: result.query_type || "Document Question",
+          attempts: result.attempts || result.retry_count || 1,
+          sources: result.sources || result.source_documents || [],
+          searchSource: result.search_source || "Documents",
+        },
+      ]);
+    } catch (apiError) {
+      setError(apiError.response?.data?.detail || apiError.message || "The question could not be answered.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const today = new Date().toDateString();
+  const yesterday = new Date(Date.now() - 86400000).toDateString();
+  
+  const groupedChats = chats.reduce((acc, chat) => {
+      const chatDate = new Date(chat.updated_at).toDateString();
+      if (chatDate === today) acc.today.push(chat);
+      else if (chatDate === yesterday) acc.yesterday.push(chat);
+      else acc.older.push(chat);
+      return acc;
+  }, { today: [], yesterday: [], older: [] });
+
+  return (
+    <div className="relative">
+    <main className="grid min-h-[calc(100vh-49px)] grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
+      <aside className="flex flex-col border-b border-line bg-[#FBFAF7] lg:border-b-0 lg:border-r">
+        <div className="p-5">
+            <button
+              type="button"
+              onClick={() => setCurrentChatId(null)}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-black text-white shadow-soft transition hover:bg-[#A93E00]"
+            >
+              <Plus size={17} /> New Chat
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef && fileInputRef.current && fileInputRef.current.click()}
+              disabled={uploading}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-black text-white shadow-soft transition hover:bg-[#A93E00] disabled:opacity-65 mt-2"
+            >
+              <Upload size={17} />
+              {uploading ? 'Uploading...' : 'Upload Document'}
+            </button>
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.docx,.pptx,.txt,.md,.csv,.xlsx,.jpg,.jpeg,.png"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-6">
+           {chatsLoading ? (
+             <p className="text-sm text-muted">Loading chats...</p>
+           ) : chats.length === 0 ? (
+             <p className="text-sm text-muted">No recent chats.</p>
+           ) : (
+             <>
+               {groupedChats.today.length > 0 && (
+                   <div>
+                       <p className="mb-2 text-xs font-bold text-[#A18478]">Today</p>
+                       <div className="space-y-1">
+                           {groupedChats.today.map((chat) => (
+                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
+                                 <div className="flex items-center gap-3 min-w-0">
+                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
+                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
+                                 </div>
+                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
+                               </div>
+                           ))}
+                       </div>
+                   </div>
+               )}
+               {groupedChats.yesterday.length > 0 && (
+                   <div>
+                       <p className="mb-2 text-xs font-bold text-[#A18478]">Yesterday</p>
+                       <div className="space-y-1">
+                           {groupedChats.yesterday.map((chat) => (
+                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
+                                 <div className="flex items-center gap-3 min-w-0">
+                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
+                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
+                                 </div>
+                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
+                               </div>
+                           ))}
+                       </div>
+                   </div>
+               )}
+               {groupedChats.older.length > 0 && (
+                   <div>
+                       <p className="mb-2 text-xs font-bold text-[#A18478]">Older</p>
+                       <div className="space-y-1">
+                           {groupedChats.older.map((chat) => (
+                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
+                                 <div className="flex items-center gap-3 min-w-0">
+                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
+                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
+                                 </div>
+                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
+                               </div>
+                           ))}
+                       </div>
+                   </div>
+               )}
+             </>
+           )}
+        </div>
+        <div className="border-t border-line p-5 mt-auto">
+          <div className="flex items-center justify-between gap-3">
+             <div className="flex items-center gap-3 min-w-0">
+               {user?.profile_picture ? (
+                  <img src={user.profile_picture} alt="Profile" className="h-8 w-8 rounded-full object-cover shrink-0" />
+               ) : (
+                  <div className="grid h-8 w-8 place-items-center rounded-full bg-[#FFE0D3] text-xs font-black text-accent shrink-0">
+                    {(user?.name || "U").slice(0, 1).toUpperCase()}
+                  </div>
+               )}
+               <div className="min-w-0">
+                 <p className="truncate text-sm font-black text-ink">{user?.name || "Authenticated User"}</p>
+                 <p className="truncate text-[11px] font-semibold text-muted">{user?.email || ""}</p>
+               </div>
+             </div>
+             <button type="button" onClick={logout} className="shrink-0 text-muted hover:text-red-600 transition" aria-label="Logout">
+                <LogOut size={16} />
+             </button>
+          </div>
+        </div>
+      </aside>
+
+      <section className="flex min-h-[640px] flex-col border-b border-line lg:border-b-0">
+        <div className="scrollbar-soft flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+          {messages.length === 0 && (
+            <div className="mx-auto mt-12 max-w-xl text-center">
+              <ShieldCheck className="mx-auto mb-4 text-accent" size={36} />
+              <h1 className="text-3xl font-black">Ask your knowledge base</h1>
+              <p className="mt-3 text-sm leading-6 text-muted">
+                Answers are checked for grounding against retrieved context before they are returned.
+              </p>
+              <div className="mt-7 grid gap-2 text-left">
+                {exampleQuestions.map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    onClick={() => {
+                      setQuestion(example);
+                      chatInputRef.current?.focus();
+                    }}
+                    className="rounded-lg border border-line bg-[#FFFEFC] px-4 py-3 text-sm font-semibold text-[#6A4034] shadow-soft transition hover:border-accent hover:text-accent"
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="mx-auto flex max-w-2xl flex-col gap-6">
+            {messages.map((message) =>
+              message.type === "question" ? (
+                <div key={message.id} className="ml-auto max-w-[80%] rounded-2xl bg-[#E9E5E1] px-5 py-4 text-sm font-medium">
+                  {message.text}
+                </div>
+              ) : (
+                <article key={message.id} className="overflow-hidden rounded-xl border border-line bg-[#FFFEFC] shadow-soft">
+                  <div className="flex flex-wrap items-center gap-4 bg-[#F5F1ED] px-5 py-3 text-xs font-semibold">
+                    <StatusPill status={message.grounded ? "verified" : "processing"}>
+                      {message.grounded ? "Verified" : "Needs Review"}
+                    </StatusPill>
+                    <span className="flex items-center gap-1 rounded bg-[#E4DCD5] px-2 py-0.5 text-[#594A42]">
+                      Source: {message.searchSource || "Documents"}
+                    </span>
+                    <span>Confidence: {message.confidence}%</span>
+                    <span>Attempts: {message.attempts}</span>
+                  </div>
+                  <div className="px-5 py-5">
+                    <p className="whitespace-pre-wrap text-sm leading-7 text-[#38302C]">{message.text}</p>
+                    {message.sources && message.sources.length > 0 && (
+                      <div className="mt-5 border-t border-line pt-4">
+                        <p className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] text-[#A18478]">Sources</p>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {message.sources.map((source, index) => (
+                            <div key={`${source.filename || source.name || source.source || index}`} className="rounded-md border border-line bg-ivory p-3">
+                              <p className="truncate text-xs font-black">{source.filename || source.name || source.source || `Source ${index + 1}`}</p>
+                              <p className="mt-1 text-[11px] text-muted">{source.page ? `Page ${source.page}` : "Retrieved context"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              )
+            )}
+            {loading && (
+              <div className="flex items-center gap-2 text-sm font-semibold text-accent">
+                <Loader2 className="animate-spin" size={17} />
+                Running self-healing workflow...
+              </div>
+            )}
+            {error && <p className="rounded-lg bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="border-t border-line bg-[#FBFAF7] p-5">
+          <div className="mx-auto max-w-2xl rounded-xl border border-line bg-[#F1EEEB] p-2 shadow-soft flex items-center gap-2">
+            <select
+              value={selectedCollection}
+              onChange={(event) => setSelectedCollection(event.target.value)}
+              className="w-32 rounded-md border border-line bg-[#FFFEFC] px-2 py-2 text-xs font-bold text-[#6A4034] outline-none"
+              aria-label="Collection scope"
+            >
+              <option value="all">All Collections</option>
+              {collections.map((col) => (
+                <option key={col.id} value={col.id}>{col.name}</option>
+              ))}
+            </select>
+            <div className="h-8 w-px bg-line"></div>
+            <div className="flex-1 flex items-center gap-3">
+              <input
+                ref={chatInputRef}
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent px-3 py-4 text-sm outline-none placeholder:text-[#766760]"
+                placeholder="Ask a question about your documents..."
+              />
+              <button type="submit" disabled={loading} className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-accent text-white disabled:opacity-60">
+                {loading ? <Loader2 className="animate-spin" size={18} /> : <SendHorizontal size={19} />}
+              </button>
+            </div>
+          </div>
+          <div className="mx-auto mt-3 flex max-w-2xl gap-5 text-xs font-semibold text-[#6A4034]">
+            <span className="flex items-center gap-1"><Sparkles size={13} /> Self-Healing Enabled</span>
+          </div>
+        </form>
+      </section>
+
+      <aside className="bg-[#FBFAF7] p-6 lg:border-l lg:border-line">
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[#A18478]">Live Workflow</p>
+        <p className="mt-2 text-xs font-semibold text-[#6A4034]">Self-Healing Cycle Logs</p>
+        <div className="mt-8 space-y-5">
+          {workflowBase.map((step, index) => (
+            <div key={step.label} className="flex gap-4">
+              <div className="flex flex-col items-center">
+                <span className={`grid h-7 w-7 place-items-center rounded-full border ${step.state === "active" ? "border-accent bg-accent text-white" : "border-line bg-paper text-muted"}`}>
+                  {step.state === "done" ? <CheckCircle2 size={14} /> : <Bot size={14} />}
+                </span>
+                {index < workflowBase.length - 1 && <span className="h-8 w-px bg-line" />}
+              </div>
+              <div>
+                <p className={`text-sm font-black ${step.state === "active" ? "text-accent" : "text-ink"}`}>{step.label}</p>
+                <p className="text-[11px] text-muted">{step.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-7 rounded-md bg-paper p-4">
+          <p className="text-[11px] font-bold uppercase text-[#8E6B5E]">Grounded Check</p>
+          <div className="mt-4 flex items-center justify-between text-xs font-black">
+            <span className={lastResponse?.grounded === false ? "text-red-600" : "text-[#D9C7BC]"}>Retry</span>
+            <span className="h-px flex-1 bg-line mx-4" />
+            <span className={lastResponse?.grounded ? "text-green-700" : "text-[#D9C7BC]"}>Answer</span>
+          </div>
+        </div>
+      </aside>
+    </main>
+    </div>
+  );
+}
