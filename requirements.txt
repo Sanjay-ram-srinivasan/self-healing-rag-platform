@@ -5,7 +5,10 @@ langgraph
 langchain-community
 langchain-groq
 chromadb
+pandas
+openpyxl
 python-docx
+python-pptx
 pypdf
 python-multipart
 python-dotenv
@@ -14,5 +17,3 @@ pytesseract
 pdf2image
 Pillow
 duckduckgo-search
-python-pptx
-openpyxl
