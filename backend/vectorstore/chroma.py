@@ -4,7 +4,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 DB_PATH = "chroma_db"
 
 def get_vectorstore():
-
     embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
