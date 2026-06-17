@@ -3,11 +3,12 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 
 DB_PATH = "chroma_db"
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5"
-)
-
 def get_vectorstore():
+
+    embedding_model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
     return Chroma(
         persist_directory=DB_PATH,
         embedding_function=embedding_model
