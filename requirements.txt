@@ -1,11 +1,11 @@
 fastapi
-fastapi
 uvicorn
 langchain
 langgraph
 langchain-community
 langchain-groq
-chromadb    
+chromadb
+python-docx
 pypdf
 python-multipart
 python-dotenv
