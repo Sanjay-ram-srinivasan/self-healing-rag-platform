@@ -1,12 +1,29 @@
+# Node
 node_modules/
 dist/
 .pnpm-store/
+
+# Uploads
 uploads/
+
+# Chroma DB
 chroma_db/
+
+# Python
 __pycache__/
+*.pyc
+
+# Environment
 .env
-*.json
-!package*.json
+.env.local
+
+# Firebase secrets
+firebase-service-account.json
+serviceAccountKey.json
+credentials.json
+
+# Logs
+*.log
+
+# Uploaded PDFs
 data/*.pdf
-chroma_db/
-.pnpm-store/
