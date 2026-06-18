@@ -17,5 +17,5 @@ pytesseract
 pdf2image
 Pillow
 duckduckgo-search
-sentence-transformers==5.1.0
-langchain-huggingface
+langchain-google-genai
+google-generativeai
