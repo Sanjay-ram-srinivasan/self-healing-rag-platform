@@ -17,5 +17,5 @@ pytesseract
 pdf2image
 Pillow
 duckduckgo-search
-langchain-google-genai
-google-generativeai
+langchain-google-genai==2.1.12
+google-generativeai==0.8.5
