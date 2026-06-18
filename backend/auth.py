@@ -48,6 +48,10 @@ def _get_firebase_app():
             )
 
             if service_account_json:
+                print("Firebase JSON exists:", bool(service_account_json))
+
+                if service_account_json:
+                  print("First 100 chars:", service_account_json[:100])
                 service_account = json.loads(
                     service_account_json
                 )
