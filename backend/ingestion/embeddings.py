@@ -5,6 +5,4 @@ def store_documents(chunks):
 
     db.add_documents(chunks)
 
-    db.persist()
-
     print("Documents stored successfully")
