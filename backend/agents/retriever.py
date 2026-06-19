@@ -20,7 +20,7 @@ def retrieve_documents(query, collection_id=None, user_id=None):
 
     try:
         # Retrieve top k documents with relevance scores and log details
-        k = max(5, 8)  # Ensure at least 5 documents are retrieved
+        k = 12  # Ensure at least 5 documents are retrieved
         scored_docs = db.similarity_search_with_relevance_scores(query, k=k, **search_kwargs)
         logger = logging.getLogger('performance')
         logger.info(f"[RETRIEVE] Retrieved {len(scored_docs)} chunks (similarity search) for query: '{query}'")
