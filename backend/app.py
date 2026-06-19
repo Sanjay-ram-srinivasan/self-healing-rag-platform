@@ -16,7 +16,8 @@ from backend.chat_history_store import create_chat, get_user_chats, get_chat, de
 from backend.collections_store import load_collections, create_collection, delete_collection, find_collection
 from backend.settings_store import load_settings, save_settings
 from backend.classification import build_direct_response, classify_query
-from backend.graph import run_self_healing_rag
+import time
+from backend.performance_logger import timed_stage
 from backend.ingestion.chunker import chunk_documents
 from backend.ingestion.document_loader import load_document
 from backend.ingestion.embeddings import store_documents
@@ -66,142 +67,6 @@ class Query(BaseModel):
 @app.get("/")
 def root():
     return {"message": "Self-Healing RAG Running"}
-
-
-@app.post("/api/chat")
-@app.post("/ask")
-async def ask_question(
-    query: Query,
-    current_user: AuthenticatedUser = Depends(verify_firebase_token),
-):
-    try:
-        query_type = classify_query(query.question)
-
-        if query_type != "Document Question":
-            answer = build_direct_response(query_type)
-            response = {
-                "answer": answer,
-                "grounded": True,
-                "confidence": 100.0,
-                "faithfulness": 100.0,
-                "relevance": 100.0,
-                "precision": 100.0,
-                "recall": 100.0,
-                "retried": False,
-                "attempts": 1,
-                "sources": [],
-                "status": "verified",
-                "verification_score": 100.0,
-                "query_type": query_type,
-            }
-            append_query_log({
-                "question": query.question,
-                "answer": answer,
-                "confidence": 100.0,
-                "faithfulness": 100.0,
-                "relevance": 100.0,
-                "precision": 100.0,
-                "recall": 100.0,
-                "grounded": True,
-                "attempts": 1,
-                "reason": f"{query_type} handled directly",
-                "sources": [],
-                "query_type": query_type,
-                "user": {
-                    "uid": current_user.uid,
-                    "name": current_user.name,
-                    "email": current_user.email,
-                    "profile_picture": current_user.profile_picture,
-                },
-                "timestamp": datetime.now().isoformat(),
-            })
-            return response
-
-        result = run_self_healing_rag(query.question, query_type=query_type, collection_id=query.collection_id, user_id=current_user.uid)
-        answer = result.get("answer", "")
-        grounded = bool(result.get("grounded", False))
-        confidence = float(result.get("confidence", 0) or 0)
-        faithfulness = float(result.get("faithfulness", 0) or 0)
-        relevance = float(result.get("relevance", 0) or 0)
-        precision = float(result.get("precision", 0) or 0)
-        recall = float(result.get("recall", 0) or 0)
-        attempts = int(result.get("attempts", 1) or 1)
-        visible_sources = result.get("sources", result.get("source_documents", []))
-        confidently_answered = grounded and confidence >= 50
-
-        if not confidently_answered:
-            answer = FALLBACK_MESSAGE
-            visible_sources = []
-
-        response = {
-            "answer": answer,
-            "grounded": grounded,
-            "confidence": confidence,
-            "faithfulness": faithfulness,
-            "relevance": relevance,
-            "precision": precision,
-            "recall": recall,
-            "retried": attempts > 1,
-            "attempts": attempts,
-            "sources": visible_sources,
-            "status": "verified" if confidently_answered else "insufficient_context",
-            "verification_score": confidence,
-            "query_type": query_type,
-        }
-
-        if query.chat_id:
-            import uuid
-            user_msg = {
-                "id": str(uuid.uuid4()),
-                "type": "question",
-                "text": query.question,
-                "timestamp": datetime.now().isoformat()
-            }
-            append_message(query.chat_id, current_user.uid, user_msg)
-            
-            agent_msg = {
-                "id": str(uuid.uuid4()),
-                "type": "answer",
-                "text": answer,
-                "confidence": confidence,
-                "grounded": grounded,
-                "status": "verified" if confidently_answered else "insufficient_context",
-                "attempts": attempts,
-                "sources": visible_sources,
-                "searchSource": result.get("search_source", "Documents"),
-                "timestamp": datetime.now().isoformat()
-            }
-            append_message(query.chat_id, current_user.uid, agent_msg)
-
-        try:
-            append_query_log({
-                "question": query.question,
-                "answer": answer,
-                "confidence": confidence,
-                "faithfulness": faithfulness,
-                "relevance": relevance,
-                "precision": precision,
-                "recall": recall,
-                "grounded": grounded,
-                "attempts": attempts,
-                "reason": result.get("reason", ""),
-                "sources": visible_sources,
-                "query_type": query_type,
-                "user": {
-                    "uid": current_user.uid,
-                    "name": current_user.name,
-                    "email": current_user.email,
-                    "profile_picture": current_user.profile_picture,
-                },
-                "timestamp": datetime.now().isoformat(),
-            })
-        except Exception:
-            logger.warning("Could not persist analytics stats", exc_info=True)
-
-        return response
-    except Exception as exc:
-        logger.exception("Error in /ask endpoint")
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/api/documents/upload")
