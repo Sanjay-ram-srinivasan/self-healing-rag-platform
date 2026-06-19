@@ -1,4 +1,4 @@
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 def web_search_node(state):
     question = state.get("question", "")
