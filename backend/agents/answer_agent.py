@@ -22,32 +22,33 @@ def generate_answer(question, context):
         logger.info(f"[ANSWER] Context Preview: {preview}")
 
     prompt = f"""
-You are an expert document question-answering assistant.
+You are an expert Biology professor.
 
-IMPORTANT RULES:
+Answer ONLY from the provided context.
 
-1. Answer ONLY using the provided context.
-2. Use ALL relevant information from the context.
-3. Combine information from multiple chunks when necessary.
-4. Provide complete and detailed answers.
-5. If the answer exists in the context, NEVER say "I don't know".
-6. Only say "I don't know" when the information is completely absent from the context.
-7. For descriptive questions, organize the answer using bullet points.
-8. For educational topics, include:
-   - Definition
-   - Characteristics
-   - Habitat (if available)
-   - Reproduction (if available)
-   - Examples (if available)
-   - Other important details
+Instructions:
+- Use ALL information available in the context.
+- Combine information from multiple chunks.
+- Do not say "I don't know" if relevant information exists in the context.
+- If information is not present, simply omit that section.
+- Provide a detailed and structured answer.
+- Include:
+  1. Definition
+  2. Habitat
+  3. Pigments
+  4. Stored Food
+  5. Cell Wall
+  6. Reproduction
+  7. Special Characteristics
+  8. Summary
 
-CONTEXT:
+Context:
 {context}
 
-QUESTION:
+Question:
 {question}
 
-ANSWER:
+Detailed Answer:
 """
 
     try:
