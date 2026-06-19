@@ -21,6 +21,7 @@ __pycache__/
 firebase-service-account.json
 serviceAccountKey.json
 credentials.json
+*firebase-adminsdk*.json
 
 # Logs
 *.log
