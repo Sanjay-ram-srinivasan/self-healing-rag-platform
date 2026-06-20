@@ -124,6 +124,20 @@ def filter_queries_by_timestamp(queries, start_dt, end_dt):
     return filtered_queries
 
 
+def log_analytics_summary(period, total_loaded, total_filtered, data):
+    logger.info("Analytics selected period: %s", period)
+    logger.info("Analytics total records loaded: %s", total_loaded)
+    logger.info("Analytics records after filtering: %s", total_filtered)
+    logger.info(
+        "Analytics returned metrics: total_queries=%s avg_confidence=%s avg_faithfulness=%s hallucination_rate=%s retry_rate=%s",
+        data.get("total_queries", 0),
+        data.get("average_confidence", 0),
+        data.get("average_faithfulness", 0),
+        data.get("hallucination_rate", 0),
+        data.get("retry_rate", 0),
+    )
+
+
 def _safe_mean(items, key):
     values = [float(item.get(key, 0) or 0) for item in items]
     return round(mean(values), 2) if values else 0.0

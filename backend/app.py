@@ -17,6 +17,7 @@ from backend.analytics import (
     append_query_log,
     filter_queries_by_timestamp,
     load_stats,
+    log_analytics_summary,
     resolve_analytics_period,
     summarize_analytics,
 )
@@ -56,6 +57,16 @@ def _save_meta(meta):
     with open(META_FILE, "w", encoding="utf-8") as file:
         json.dump(meta, file, indent=2)
 
+app = FastAPI(title="Self-Healing RAG Platform")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 def hydrate_persistent_storage():
@@ -69,17 +80,6 @@ def hydrate_persistent_storage():
         sync_chats_from_firestore()
     except Exception:
         logger.warning("Chat history sync on startup failed.", exc_info=True)
-
-
-app = FastAPI(title="Self-Healing RAG Platform")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 class Query(BaseModel):
@@ -284,12 +284,13 @@ def analytics(
     filtered_queries = filter_queries_by_timestamp(all_queries, start_dt, end_dt)
     logger.info("Analytics records after filtering: %s", len(filtered_queries))
     stats["queries"] = filtered_queries
-
-    return summarize_analytics(
+    data = summarize_analytics(
         stats=stats,
         total_documents=total_documents,
         vector_store_mb=vector_store_mb,
     )
+    log_analytics_summary(period, len(all_queries), len(filtered_queries), data)
+    return data
 @app.get("/api/analytics/export")
 @app.get("/analytics/export")
 def export_analytics(
@@ -333,6 +334,7 @@ def export_analytics(
         total_documents=total_documents,
         vector_store_mb=vector_store_mb,
     )
+    log_analytics_summary(period, len(user_queries), len(filtered_queries), data)
     if format.lower() == "json":
         from fastapi.responses import JSONResponse
         import json

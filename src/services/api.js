@@ -56,6 +56,7 @@ export const fetchAnalytics = async (period = "7d", startDate = null, endDate = 
   if (period === "custom" && startDate && endDate) {
     url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
   }
+  console.info("[Analytics Request]", { period, startDate, endDate, url });
   const { data } = await api.get(url);
   return data;
 };
@@ -65,6 +66,7 @@ export const exportAnalytics = async (format, period = "7d", startDate = null, e
   if (period === "custom" && startDate && endDate) {
     url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
   }
+  console.info("[Analytics Export Request]", { format, period, startDate, endDate, url });
   const response = await api.get(url, {
     responseType: "blob",
   });
