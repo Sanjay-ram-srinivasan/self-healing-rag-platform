@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from statistics import mean
 
 
@@ -47,6 +47,79 @@ def append_query_log(entry):
     stats.setdefault("queries", []).append(entry)
     save_stats(stats)
     return stats
+
+
+def parse_query_timestamp(timestamp_value):
+    if not timestamp_value:
+        return None
+
+    if isinstance(timestamp_value, datetime):
+        parsed = timestamp_value
+        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+
+    if isinstance(timestamp_value, date):
+        return datetime.combine(timestamp_value, time.min)
+
+    if isinstance(timestamp_value, (int, float)):
+        return datetime.fromtimestamp(timestamp_value)
+
+    if isinstance(timestamp_value, str):
+        try:
+            parsed = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
+            return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+        except ValueError:
+            return None
+
+    return None
+
+
+def resolve_analytics_period(period, start_date=None, end_date=None, now=None):
+    now = now or datetime.now()
+
+    if period == "today":
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now
+    elif period == "7d":
+        start_dt = now - timedelta(days=7)
+        end_dt = now
+    elif period == "30d":
+        start_dt = now - timedelta(days=30)
+        end_dt = now
+    elif period == "custom":
+        if not start_date or not end_date:
+            raise ValueError("Custom period requires start_date and end_date.")
+
+        try:
+            start_dt = parse_query_timestamp(start_date)
+            end_dt = parse_query_timestamp(end_date)
+        except ValueError as exc:
+            raise ValueError("Invalid custom date format. Use ISO format.") from exc
+
+        if start_dt is None or end_dt is None:
+            raise ValueError("Invalid custom date format. Use ISO format.")
+
+        if isinstance(start_date, str) and "T" not in start_date:
+            start_dt = datetime.combine(start_dt.date(), time.min)
+        if isinstance(end_date, str) and "T" not in end_date:
+            end_dt = datetime.combine(end_dt.date(), time.max)
+    else:
+        start_dt = now - timedelta(days=7)
+        end_dt = now
+
+    return start_dt, end_dt
+
+
+def filter_queries_by_timestamp(queries, start_dt, end_dt):
+    filtered_queries = []
+
+    for query in queries:
+        query_dt = parse_query_timestamp(query.get("timestamp"))
+        if query_dt is None:
+            continue
+        if start_dt <= query_dt <= end_dt:
+            filtered_queries.append(query)
+
+    return filtered_queries
 
 
 def _safe_mean(items, key):

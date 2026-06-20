@@ -6,14 +6,20 @@ import os
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.analytics import append_query_log, load_stats, summarize_analytics
+from backend.analytics import (
+    append_query_log,
+    filter_queries_by_timestamp,
+    load_stats,
+    resolve_analytics_period,
+    summarize_analytics,
+)
 from backend.auth import AuthenticatedUser, verify_firebase_token
 from backend.chat_history_store import create_chat, get_user_chats, get_chat, delete_chat, append_message
 from backend.collections_store import load_collections, create_collection, delete_collection, find_collection
@@ -230,27 +236,10 @@ def reindex_document(
 def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token), period: str = "7d", startDate: str | None = None, endDate: str | None = None):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-    # Determine date range based on period
-    now = datetime.now()
-    if period == "today":
-        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_dt = now
-    elif period == "7d":
-        start_dt = now - timedelta(days=7)
-        end_dt = now
-    elif period == "30d":
-        start_dt = now - timedelta(days=30)
-        end_dt = now
-    elif period == "custom" and startDate and endDate:
-        try:
-            start_dt = datetime.fromisoformat(startDate)
-            end_dt = datetime.fromisoformat(endDate)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid custom date format. Use ISO format.")
-    else:
-        # Default to 7d if unknown period
-        start_dt = now - timedelta(days=7)
-        end_dt = now
+    try:
+        start_dt, end_dt = resolve_analytics_period(period, startDate, endDate, now=datetime.now())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     total_documents = len([
         fname for fname in os.listdir(UPLOAD_DIR)
@@ -264,27 +253,14 @@ def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token), 
     vector_store_mb = round(total_size_bytes / (1024 * 1024), 2)
 
     stats = load_stats()
-    # Filter queries for the current user within the date range
     all_queries = [
         q for q in stats.get("queries", [])
         if q.get("user", {}).get("uid") == current_user.uid
     ]
-    logger.info(f"Analytics period: {period}")
-    logger.info(f"Records before filter: {len(all_queries)}")
-    # Apply date filtering
-    filtered_queries = []
-    for q in all_queries:
-        ts = q.get("timestamp")
-        if not ts:
-            continue
-        try:
-            q_dt = datetime.fromisoformat(ts)
-        except ValueError:
-            continue
-        if start_dt <= q_dt <= end_dt:
-            filtered_queries.append(q)
-    logger.info(f"Records after filter: {len(filtered_queries)}")
-    # Replace stats queries with filtered list for summarization
+    logger.info("Analytics period selected: %s", period)
+    logger.info("Analytics records before filtering: %s", len(all_queries))
+    filtered_queries = filter_queries_by_timestamp(all_queries, start_dt, end_dt)
+    logger.info("Analytics records after filtering: %s", len(filtered_queries))
     stats["queries"] = filtered_queries
 
     return summarize_analytics(
