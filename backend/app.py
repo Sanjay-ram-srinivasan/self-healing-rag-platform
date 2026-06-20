@@ -227,8 +227,30 @@ def reindex_document(
 
 @app.get("/api/analytics")
 @app.get("/analytics")
-def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token), period: str = "7d", startDate: str | None = None, endDate: str | None = None):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    # Determine date range based on period
+    now = datetime.now()
+    if period == "today":
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_dt = now
+    elif period == "7d":
+        start_dt = now - timedelta(days=7)
+        end_dt = now
+    elif period == "30d":
+        start_dt = now - timedelta(days=30)
+        end_dt = now
+    elif period == "custom" and startDate and endDate:
+        try:
+            start_dt = datetime.fromisoformat(startDate)
+            end_dt = datetime.fromisoformat(endDate)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid custom date format. Use ISO format.")
+    else:
+        # Default to 7d if unknown period
+        start_dt = now - timedelta(days=7)
+        end_dt = now
 
     total_documents = len([
         fname for fname in os.listdir(UPLOAD_DIR)
@@ -242,12 +264,29 @@ def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
     vector_store_mb = round(total_size_bytes / (1024 * 1024), 2)
 
     stats = load_stats()
-    user_queries = [
-        q for q in stats.get("queries", []) 
+    # Filter queries for the current user within the date range
+    all_queries = [
+        q for q in stats.get("queries", [])
         if q.get("user", {}).get("uid") == current_user.uid
     ]
-    stats["queries"] = user_queries
-    
+    logger.info(f"Analytics period: {period}")
+    logger.info(f"Records before filter: {len(all_queries)}")
+    # Apply date filtering
+    filtered_queries = []
+    for q in all_queries:
+        ts = q.get("timestamp")
+        if not ts:
+            continue
+        try:
+            q_dt = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if start_dt <= q_dt <= end_dt:
+            filtered_queries.append(q)
+    logger.info(f"Records after filter: {len(filtered_queries)}")
+    # Replace stats queries with filtered list for summarization
+    stats["queries"] = filtered_queries
+
     return summarize_analytics(
         stats=stats,
         total_documents=total_documents,

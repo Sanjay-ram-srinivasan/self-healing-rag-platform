@@ -51,8 +51,12 @@ export const reindexDocument = async (filename) => {
   return data;
 };
 
-export const fetchAnalytics = async () => {
-  const { data } = await api.get("/api/analytics");
+export const fetchAnalytics = async (period = "7d", startDate = null, endDate = null) => {
+  let url = `/api/analytics?period=${encodeURIComponent(period)}`;
+  if (period === "custom" && startDate && endDate) {
+    url += `&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+  }
+  const { data } = await api.get(url);
   return data;
 };
 
