@@ -54,14 +54,18 @@ export const reindexDocument = async (filename) => {
 export const fetchAnalytics = async (period = "7d", startDate = null, endDate = null) => {
   let url = `/api/analytics?period=${encodeURIComponent(period)}`;
   if (period === "custom" && startDate && endDate) {
-    url += `&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+    url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
   }
   const { data } = await api.get(url);
   return data;
 };
 
-export const exportAnalytics = async (format) => {
-  const response = await api.get(`/api/analytics/export?format=${format}`, {
+export const exportAnalytics = async (format, period = "7d", startDate = null, endDate = null) => {
+  let url = `/api/analytics/export?format=${encodeURIComponent(format)}&period=${encodeURIComponent(period)}`;
+  if (period === "custom" && startDate && endDate) {
+    url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+  }
+  const response = await api.get(url, {
     responseType: "blob",
   });
   return response.data; // already a Blob

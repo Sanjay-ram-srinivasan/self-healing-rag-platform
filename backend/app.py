@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(na
 import shutil
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ from backend.analytics import (
 from backend.auth import AuthenticatedUser, verify_firebase_token
 from backend.chat_history_store import create_chat, get_user_chats, get_chat, delete_chat, append_message
 from backend.collections_store import load_collections, create_collection, delete_collection, find_collection
+from backend.document_store import delete_from_storage, sync_from_storage, upload_to_storage
 from backend.settings_store import load_settings, save_settings
 from backend.classification import build_direct_response, classify_query
 import time
@@ -54,6 +55,20 @@ def _save_meta(meta):
     os.makedirs(os.path.dirname(META_FILE), exist_ok=True)
     with open(META_FILE, "w", encoding="utf-8") as file:
         json.dump(meta, file, indent=2)
+
+
+@app.on_event("startup")
+def hydrate_persistent_storage():
+    restored_files = sync_from_storage()
+    if restored_files:
+        logger.info("Restored %s uploaded files from Firebase Storage.", restored_files)
+    # Touch chat storage so the local cache reflects Firestore on boot when available.
+    try:
+        from backend.chat_history_store import sync_chats_from_firestore
+
+        sync_chats_from_firestore()
+    except Exception:
+        logger.warning("Chat history sync on startup failed.", exc_info=True)
 
 
 app = FastAPI(title="Self-Healing RAG Platform")
@@ -96,6 +111,7 @@ async def upload_document(
 
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    upload_to_storage(file.filename)
 
     documents = load_document(file_path)
     chunks = chunk_documents(documents)
@@ -185,6 +201,7 @@ def delete_document(
         return {"error": "File not found"}
 
     os.remove(file_path)
+    delete_from_storage(filename)
     meta = _load_meta()
     if filename in meta:
         del meta[filename]
@@ -233,11 +250,16 @@ def reindex_document(
 
 @app.get("/api/analytics")
 @app.get("/analytics")
-def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token), period: str = "7d", startDate: str | None = None, endDate: str | None = None):
+def analytics(
+    current_user: AuthenticatedUser = Depends(verify_firebase_token),
+    period: str = "7d",
+    start_date: str | None = QueryParam(default=None, alias="start_date"),
+    end_date: str | None = QueryParam(default=None, alias="end_date"),
+):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     try:
-        start_dt, end_dt = resolve_analytics_period(period, startDate, endDate, now=datetime.now())
+        start_dt, end_dt = resolve_analytics_period(period, start_date, end_date, now=datetime.now())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -270,7 +292,13 @@ def analytics(current_user: AuthenticatedUser = Depends(verify_firebase_token), 
     )
 @app.get("/api/analytics/export")
 @app.get("/analytics/export")
-def export_analytics(format: str = "csv", current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+def export_analytics(
+    format: str = "csv",
+    period: str = "7d",
+    start_date: str | None = QueryParam(default=None, alias="start_date"),
+    end_date: str | None = QueryParam(default=None, alias="end_date"),
+    current_user: AuthenticatedUser = Depends(verify_firebase_token),
+):
     """Export analytics data as CSV or JSON for download.
     Default format is CSV. Use `format=json` for JSON output.
     """
@@ -290,7 +318,16 @@ def export_analytics(format: str = "csv", current_user: AuthenticatedUser = Depe
         q for q in stats.get("queries", [])
         if q.get("user", {}).get("uid") == current_user.uid
     ]
-    stats["queries"] = user_queries
+    try:
+        start_dt, end_dt = resolve_analytics_period(period, start_date, end_date, now=datetime.now())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    logger.info("Analytics period selected: %s", period)
+    logger.info("Analytics records before filtering: %s", len(user_queries))
+    filtered_queries = filter_queries_by_timestamp(user_queries, start_dt, end_dt)
+    logger.info("Analytics records after filtering: %s", len(filtered_queries))
+    stats["queries"] = filtered_queries
     data = summarize_analytics(
         stats=stats,
         total_documents=total_documents,
@@ -401,6 +438,81 @@ def list_chats(current_user: AuthenticatedUser = Depends(verify_firebase_token))
 @app.post("/chats")
 def create_new_chat(payload: ChatCreate, current_user: AuthenticatedUser = Depends(verify_firebase_token)):
     return create_chat(current_user.uid, payload.title)
+
+
+@app.post("/api/chat")
+def ask_question(payload: Query, current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+    query_type = classify_query(payload.question)
+    if query_type != "Document Question":
+        answer = build_direct_response(query_type)
+        result = {
+            "answer": answer,
+            "confidence": 100,
+            "faithfulness": 100,
+            "relevance": 100,
+            "precision": 100,
+            "recall": 100,
+            "grounded": True,
+            "reason": "",
+            "attempts": 1,
+            "sources": [],
+            "search_source": "Direct Response",
+            "query_type": query_type,
+        }
+    else:
+        from backend.graph import run_self_healing_rag
+
+        result = run_self_healing_rag(
+            payload.question,
+            query_type=query_type,
+            collection_id=payload.collection_id,
+            user_id=current_user.uid,
+        )
+        result["query_type"] = query_type
+
+    append_query_log({
+        "question": payload.question,
+        "user": {
+            "uid": current_user.uid,
+            "name": current_user.name,
+            "email": current_user.email,
+        },
+        "collection_id": payload.collection_id,
+        "chat_id": payload.chat_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "confidence": result.get("confidence", 0),
+        "faithfulness": result.get("faithfulness", 0),
+        "relevance": result.get("relevance", 0),
+        "precision": result.get("precision", 0),
+        "recall": result.get("recall", 0),
+        "grounded": result.get("grounded", False),
+        "reason": result.get("reason", ""),
+        "attempts": result.get("attempts", 1),
+    })
+
+    if payload.chat_id:
+        append_message(
+            payload.chat_id,
+            current_user.uid,
+            {"type": "question", "text": payload.question, "timestamp": datetime.utcnow().isoformat()},
+        )
+        append_message(
+            payload.chat_id,
+            current_user.uid,
+            {
+                "type": "answer",
+                "text": result.get("answer", ""),
+                "timestamp": datetime.utcnow().isoformat(),
+                "confidence": result.get("confidence", 0),
+                "grounded": result.get("grounded", False),
+                "status": "verified" if result.get("grounded") else "insufficient_context",
+                "attempts": result.get("attempts", 1),
+                "sources": result.get("sources", []),
+                "searchSource": result.get("search_source", "Documents"),
+            },
+        )
+
+    return result
 
 @app.get("/api/chats/{chat_id}")
 @app.get("/chats/{chat_id}")

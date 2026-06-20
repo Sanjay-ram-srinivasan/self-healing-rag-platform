@@ -44,7 +44,9 @@ def save_stats(stats):
 
 def append_query_log(entry):
     stats = load_stats()
-    stats.setdefault("queries", []).append(entry)
+    next_entry = dict(entry)
+    next_entry.setdefault("timestamp", datetime.utcnow().isoformat())
+    stats.setdefault("queries", []).append(next_entry)
     save_stats(stats)
     return stats
 
@@ -135,14 +137,10 @@ def build_history(queries, days=7):
         day = (now - timedelta(days=offset)).date()
         day_queries = []
         for item in queries:
-            timestamp = item.get("timestamp")
-            if not timestamp:
+            item_dt = parse_query_timestamp(item.get("timestamp"))
+            if item_dt is None:
                 continue
-            try:
-                item_day = datetime.fromisoformat(timestamp).date()
-            except ValueError:
-                continue
-            if item_day == day:
+            if item_dt.date() == day:
                 day_queries.append(item)
 
         history.append({

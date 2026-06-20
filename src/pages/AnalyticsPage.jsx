@@ -73,7 +73,7 @@ export default function AnalyticsPage({ documentsCount }) {
     return () => {
       mounted = false;
     };
-  }, [dateRange, customRange]);
+  }, [dateRange, customRange.start, customRange.end]);
 
   useEffect(() => {
     if (!liveOpen) return undefined;
@@ -183,7 +183,12 @@ export default function AnalyticsPage({ documentsCount }) {
                         onClick={async () => {
                            setExportOpen(false);
                            try {
-                             const blob = await exportAnalytics(format.toLowerCase());
+                            const blob = await exportAnalytics(
+                              format.toLowerCase(),
+                              dateRange,
+                              customRange.start,
+                              customRange.end,
+                            );
                              const url = window.URL.createObjectURL(blob);
                              const a = document.createElement('a');
                              a.href = url;
