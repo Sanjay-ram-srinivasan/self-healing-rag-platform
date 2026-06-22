@@ -42,6 +42,14 @@ FALLBACK_MESSAGE = "I couldn't find enough relevant information in the uploaded 
 
 
 def _load_meta():
+    """Load document metadata from Firestore; fallback to local JSON file if Firestore unavailable."""
+    client = get_firestore_client()
+    if client:
+        doc_ref = client.collection('metadata').document('documents_meta')
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+    # Fallback to local file
     os.makedirs(os.path.dirname(META_FILE), exist_ok=True)
     if os.path.exists(META_FILE):
         try:
@@ -56,6 +64,10 @@ def _save_meta(meta):
     os.makedirs(os.path.dirname(META_FILE), exist_ok=True)
     with open(META_FILE, "w", encoding="utf-8") as file:
         json.dump(meta, file, indent=2)
+    client = get_firestore_client()
+    if client:
+        doc_ref = client.collection('metadata').document('documents_meta')
+        doc_ref.set(meta)
 
 app = FastAPI(title="Self-Healing RAG Platform")
 
@@ -70,13 +82,31 @@ app.add_middleware(
 
 @app.on_event("startup")
 def hydrate_persistent_storage():
+    # Restore any files that were uploaded to Firebase Storage but not present locally.
     restored_files = sync_from_storage()
     if restored_files:
         logger.info("Restored %s uploaded files from Firebase Storage.", restored_files)
-    # Touch chat storage so the local cache reflects Firestore on boot when available.
+
+    # Ensure vector store (Chroma) is populated. If empty, rebuild from all persisted documents.
+    try:
+        from backend.vectorstore.chroma import get_vectorstore
+        vectorstore = get_vectorstore()
+        # Chroma's .get() returns a dict with a 'documents' key.
+        docs = vectorstore.get().get("documents", [])
+        if not docs:
+            logger.info("Vector store empty; rebuilding from uploaded documents.")
+            for fname in os.listdir(UPLOAD_DIR):
+                file_path = os.path.join(UPLOAD_DIR, fname)
+                if os.path.isfile(file_path):
+                    documents = load_document(file_path)
+                    chunks = chunk_documents(documents)
+                    store_documents(chunks)
+    except Exception as e:
+        logger.warning("Failed to verify or rebuild vector store: %s", e, exc_info=True)
+
+    # Sync chat history from Firestore to local cache on startup.
     try:
         from backend.chat_history_store import sync_chats_from_firestore
-
         sync_chats_from_firestore()
     except Exception:
         logger.warning("Chat history sync on startup failed.", exc_info=True)
