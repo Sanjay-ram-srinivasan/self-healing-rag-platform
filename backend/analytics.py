@@ -88,6 +88,10 @@ def resolve_analytics_period(selected_range, start_date=None, end_date=None, now
     elif selected_range == "30d":
         start_dt = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now
+    elif selected_range == "all":
+        # No filtering: start from earliest possible date
+        start_dt = datetime.min.replace(tzinfo=None)
+        end_dt = now
     elif selected_range == "custom":
         if not start_date or not end_date:
             raise ValueError("Custom range requires start_date and end_date.")

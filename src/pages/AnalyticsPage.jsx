@@ -34,7 +34,20 @@ export default function AnalyticsPage({ documentsCount }) {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [dateRange, setDateRange] = useState("7d");
+  const [dateRange, setDateRange] = useState("all");
+  // ...
+              <div className="flex rounded-md border border-line bg-paper px-3 py-2">
+                {["All", "Today", "7d", "30d", "Custom"].map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    onClick={() => setDateRange(range.toLowerCase())}
+                    className={`rounded px-3 py-2 text-xs font-black ${dateRange === range.toLowerCase() ? "bg-accent text-white" : "text-[#6A4034]"}`}
+                  >
+                    {range}
+                  </button>
+                ))}
+              </div>
   const [customRange, setCustomRange] = useState({ start: "", end: "" });
   const [exportOpen, setExportOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
