@@ -75,21 +75,22 @@ def parse_query_timestamp(timestamp_value):
     return None
 
 
-def resolve_analytics_period(period, start_date=None, end_date=None, now=None):
-    now = now or datetime.now()
+def resolve_analytics_period(selected_range, start_date=None, end_date=None, now=None):
+    now = now or datetime.utcnow()
+    selected_range = (selected_range or "7d").strip().lower()
 
-    if period == "today":
+    if selected_range == "today":
         start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now
-    elif period == "7d":
-        start_dt = now - timedelta(days=7)
+    elif selected_range == "7d":
+        start_dt = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now
-    elif period == "30d":
-        start_dt = now - timedelta(days=30)
+    elif selected_range == "30d":
+        start_dt = (now - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now
-    elif period == "custom":
+    elif selected_range == "custom":
         if not start_date or not end_date:
-            raise ValueError("Custom period requires start_date and end_date.")
+            raise ValueError("Custom range requires start_date and end_date.")
 
         try:
             start_dt = parse_query_timestamp(start_date)
@@ -105,7 +106,7 @@ def resolve_analytics_period(period, start_date=None, end_date=None, now=None):
         if isinstance(end_date, str) and "T" not in end_date:
             end_dt = datetime.combine(end_dt.date(), time.max)
     else:
-        start_dt = now - timedelta(days=7)
+        start_dt = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = now
 
     return start_dt, end_dt
@@ -124,8 +125,8 @@ def filter_queries_by_timestamp(queries, start_dt, end_dt):
     return filtered_queries
 
 
-def log_analytics_summary(period, total_loaded, total_filtered, data):
-    logger.info("Analytics selected period: %s", period)
+def log_analytics_summary(selected_range, total_loaded, total_filtered, data):
+    logger.info("Analytics selected range: %s", selected_range)
     logger.info("Analytics total records loaded: %s", total_loaded)
     logger.info("Analytics records after filtering: %s", total_filtered)
     logger.info(
@@ -143,12 +144,18 @@ def _safe_mean(items, key):
     return round(mean(values), 2) if values else 0.0
 
 
-def build_history(queries, days=7):
-    now = datetime.now()
+def build_history(queries, start_dt=None, end_dt=None):
+    end_dt = end_dt or datetime.utcnow()
+    if start_dt is None:
+        start_dt = (end_dt - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    start_day = start_dt.date()
+    end_day = end_dt.date()
+    total_days = max(1, (end_day - start_day).days + 1)
     history = []
 
-    for offset in range(days - 1, -1, -1):
-        day = (now - timedelta(days=offset)).date()
+    for day_offset in range(total_days):
+        day = start_day + timedelta(days=day_offset)
         day_queries = []
         for item in queries:
             item_dt = parse_query_timestamp(item.get("timestamp"))
@@ -171,7 +178,14 @@ def build_history(queries, days=7):
     return history
 
 
-def summarize_analytics(stats, total_documents=0, vector_store_mb=0.0):
+def summarize_analytics(
+    stats,
+    total_documents=0,
+    vector_store_mb=0.0,
+    start_dt=None,
+    end_dt=None,
+    selected_range="7d",
+):
     queries = stats.get("queries", [])
     total_queries = len(queries)
     retried_queries = [item for item in queries if int(item.get("attempts", 1) or 1) > 1]
@@ -202,9 +216,14 @@ def summarize_analytics(stats, total_documents=0, vector_store_mb=0.0):
         for item in reversed(hallucinated_queries[-10:])
     ]
 
+    history = build_history(queries, start_dt=start_dt, end_dt=end_dt)
+
     return {
         "documents_indexed": total_documents,
         "vector_store_mb": vector_store_mb,
+        "range": selected_range,
+        "start_date": start_dt.isoformat() if start_dt else None,
+        "end_date": end_dt.isoformat() if end_dt else None,
         "total_queries": total_queries,
         "questions_asked": total_queries,
         "verified_answers": total_queries - len(hallucinated_queries),
@@ -213,14 +232,14 @@ def summarize_analytics(stats, total_documents=0, vector_store_mb=0.0):
         "hallucination_rate": round((len(hallucinated_queries) / total_queries) * 100, 2) if total_queries else 0.0,
         "hallucination_prevention_rate": round(((total_queries - len(hallucinated_queries)) / total_queries) * 100, 2) if total_queries else 0.0,
         "retry_rate": round((len(retried_queries) / total_queries) * 100, 2) if total_queries else 0.0,
-        "history": build_history(queries, days=7),
+        "history": history,
         "retry_history": [
             {
                 "date": item["date"],
                 "retries": item["retries"],
                 "questions": item["questions"],
             }
-            for item in build_history(queries, days=7)
+            for item in history
         ],
         "recent_queries": list(reversed(queries[-20:])),
         "failed_queries": failed_queries,

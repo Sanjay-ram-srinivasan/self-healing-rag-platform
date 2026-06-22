@@ -46,22 +46,20 @@ export default function AnalyticsPage({ documentsCount }) {
     const load = async () => {
       setLoading(true);
       setError("");
+      setAnalytics(null);
       try {
-        // Determine parameters based on selected period
-        let period = dateRange;
+        let range = dateRange;
         let start = null;
         let end = null;
         if (dateRange === "custom") {
-          // Require both start and end dates before fetching
           if (!customRange.start || !customRange.end) {
-            // No dates selected yet – skip fetch
             if (mounted) setLoading(false);
             return;
           }
           start = customRange.start;
           end = customRange.end;
         }
-        const data = await fetchAnalytics(period, start, end);
+        const data = await fetchAnalytics(range, start, end);
         if (mounted) setAnalytics(data);
       } catch (apiError) {
         if (mounted) setError(apiError.response?.data?.detail || apiError.message || "Unable to load analytics.");
@@ -102,18 +100,7 @@ export default function AnalyticsPage({ documentsCount }) {
   const hallucinationRate = Number(metrics.hallucination_rate || 0);
   const retryRate = Number(metrics.retry_rate || 0);
   const indexedDocuments = Number(metrics.documents_indexed ?? documentsCount ?? 0);
-  const history = metrics.history?.length ? metrics.history : [
-    {
-      date: "Day 1",
-      questions: 0,
-      retries: 0,
-      average_confidence: 0,
-      average_faithfulness: 0,
-      average_relevance: 0,
-      average_precision: 0,
-      average_recall: 0,
-    },
-  ];
+  const history = metrics.history ?? [];
 
   const overviewChart = useMemo(() => ([
     { name: "Queries", value: totalQueries },

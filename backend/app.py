@@ -252,14 +252,14 @@ def reindex_document(
 @app.get("/analytics")
 def analytics(
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
-    period: str = "7d",
+    selected_range: str = QueryParam(default="7d", alias="range"),
     start_date: str | None = QueryParam(default=None, alias="start_date"),
     end_date: str | None = QueryParam(default=None, alias="end_date"),
 ):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     try:
-        start_dt, end_dt = resolve_analytics_period(period, start_date, end_date, now=datetime.now())
+        start_dt, end_dt = resolve_analytics_period(selected_range, start_date, end_date, now=datetime.utcnow())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -279,7 +279,7 @@ def analytics(
         q for q in stats.get("queries", [])
         if q.get("user", {}).get("uid") == current_user.uid
     ]
-    logger.info("Analytics period selected: %s", period)
+    logger.info("Analytics range selected: %s", selected_range)
     logger.info("Analytics records before filtering: %s", len(all_queries))
     filtered_queries = filter_queries_by_timestamp(all_queries, start_dt, end_dt)
     logger.info("Analytics records after filtering: %s", len(filtered_queries))
@@ -288,14 +288,18 @@ def analytics(
         stats=stats,
         total_documents=total_documents,
         vector_store_mb=vector_store_mb,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        selected_range=selected_range,
     )
-    log_analytics_summary(period, len(all_queries), len(filtered_queries), data)
+    log_analytics_summary(selected_range, len(all_queries), len(filtered_queries), data)
     return data
+
 @app.get("/api/analytics/export")
 @app.get("/analytics/export")
 def export_analytics(
     format: str = "csv",
-    period: str = "7d",
+    selected_range: str = QueryParam(default="7d", alias="range"),
     start_date: str | None = QueryParam(default=None, alias="start_date"),
     end_date: str | None = QueryParam(default=None, alias="end_date"),
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
@@ -320,11 +324,11 @@ def export_analytics(
         if q.get("user", {}).get("uid") == current_user.uid
     ]
     try:
-        start_dt, end_dt = resolve_analytics_period(period, start_date, end_date, now=datetime.now())
+        start_dt, end_dt = resolve_analytics_period(selected_range, start_date, end_date, now=datetime.utcnow())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    logger.info("Analytics period selected: %s", period)
+    logger.info("Analytics range selected: %s", selected_range)
     logger.info("Analytics records before filtering: %s", len(user_queries))
     filtered_queries = filter_queries_by_timestamp(user_queries, start_dt, end_dt)
     logger.info("Analytics records after filtering: %s", len(filtered_queries))
@@ -333,8 +337,11 @@ def export_analytics(
         stats=stats,
         total_documents=total_documents,
         vector_store_mb=vector_store_mb,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        selected_range=selected_range,
     )
-    log_analytics_summary(period, len(user_queries), len(filtered_queries), data)
+    log_analytics_summary(selected_range, len(user_queries), len(filtered_queries), data)
     if format.lower() == "json":
         from fastapi.responses import JSONResponse
         import json

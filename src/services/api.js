@@ -51,22 +51,22 @@ export const reindexDocument = async (filename) => {
   return data;
 };
 
-export const fetchAnalytics = async (period = "7d", startDate = null, endDate = null) => {
-  let url = `/api/analytics?period=${encodeURIComponent(period)}`;
-  if (period === "custom" && startDate && endDate) {
+export const fetchAnalytics = async (range = "7d", startDate = null, endDate = null) => {
+  let url = `/api/analytics?range=${encodeURIComponent(range)}`;
+  if (range === "custom" && startDate && endDate) {
     url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
   }
-  console.info("[Analytics Request]", { period, startDate, endDate, url });
+  console.info("[Analytics Request]", { range, startDate, endDate, url });
   const { data } = await api.get(url);
   return data;
 };
 
-export const exportAnalytics = async (format, period = "7d", startDate = null, endDate = null) => {
-  let url = `/api/analytics/export?format=${encodeURIComponent(format)}&period=${encodeURIComponent(period)}`;
-  if (period === "custom" && startDate && endDate) {
+export const exportAnalytics = async (format, range = "7d", startDate = null, endDate = null) => {
+  let url = `/api/analytics/export?format=${encodeURIComponent(format)}&range=${encodeURIComponent(range)}`;
+  if (range === "custom" && startDate && endDate) {
     url += `&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
   }
-  console.info("[Analytics Export Request]", { format, period, startDate, endDate, url });
+  console.info("[Analytics Export Request]", { format, range, startDate, endDate, url });
   const response = await api.get(url, {
     responseType: "blob",
   });
