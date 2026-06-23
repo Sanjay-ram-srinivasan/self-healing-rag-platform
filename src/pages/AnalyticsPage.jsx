@@ -34,7 +34,7 @@ export default function AnalyticsPage({ documentsCount }) {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [dateRange, setDateRange] = useState("all");
+  const [dateRange, setDateRange] = useState("today");
   // ...
               <div className="flex rounded-md border border-line bg-paper px-3 py-2">
                 {["All", "Today", "7d", "30d", "Custom"].map((range) => (
