@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 from statistics import mean
 
@@ -183,6 +184,40 @@ def is_hallucinated(item):
     return faithfulness is not None and faithfulness < 70
 
 
+def _source_name(source):
+    if isinstance(source, str):
+        raw_name = source
+    elif isinstance(source, dict):
+        raw_name = (
+            source.get("filename")
+            or source.get("name")
+            or source.get("source")
+            or source.get("document")
+        )
+    else:
+        raw_name = None
+
+    if not raw_name:
+        return None
+    return os.path.basename(str(raw_name).replace("\\", os.sep))
+
+
+def most_queried_documents(queries, limit=10):
+    document_counts = Counter()
+    for item in queries:
+        seen_for_query = set()
+        for source in item.get("sources") or item.get("source_documents") or []:
+            name = _source_name(source)
+            if name:
+                seen_for_query.add(name)
+        document_counts.update(seen_for_query)
+
+    return [
+        {"document": document, "queries": count}
+        for document, count in document_counts.most_common(limit)
+    ]
+
+
 def build_history(queries, start_dt=None, end_dt=None):
     end_dt = end_dt or datetime.utcnow()
     if start_dt is None:
@@ -284,5 +319,45 @@ def summarize_analytics(
         ],
         "recent_queries": list(reversed(queries[-20:])),
         "failed_queries": failed_queries,
+        "most_queried_documents": most_queried_documents(queries),
         "status": "healthy",
+    }
+
+
+def build_analytics_report(data):
+    return {
+        "date_range": {
+            "range": data.get("range"),
+            "start_date": data.get("start_date"),
+            "end_date": data.get("end_date"),
+        },
+        "total_queries": data.get("total_queries", 0),
+        "confidence_metrics": {
+            "average_confidence": data.get("average_confidence", 0),
+            "history": [
+                {
+                    "date": item.get("date"),
+                    "questions": item.get("questions", 0),
+                    "average_confidence": item.get("average_confidence", 0),
+                }
+                for item in data.get("history", [])
+            ],
+        },
+        "faithfulness_metrics": {
+            "average_faithfulness": data.get("average_faithfulness", 0),
+            "average_relevance": data.get("average_relevance", 0),
+            "average_precision": data.get("average_precision", 0),
+            "average_recall": data.get("average_recall", 0),
+        },
+        "hallucination_rate": {
+            "rate": data.get("hallucination_rate", 0),
+            "count": data.get("hallucination_count", 0),
+            "reliable_count": data.get("reliable_count", 0),
+        },
+        "retry_statistics": {
+            "retry_rate": data.get("retry_rate", 0),
+            "retry_count": data.get("retry_count", 0),
+            "retry_history": data.get("retry_history", []),
+        },
+        "most_queried_documents": data.get("most_queried_documents", []),
     }

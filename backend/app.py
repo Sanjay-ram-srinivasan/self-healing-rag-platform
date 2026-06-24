@@ -10,11 +10,12 @@ from datetime import datetime
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.analytics import (
     append_query_log,
+    build_analytics_report,
     filter_queries_by_timestamp,
     load_stats,
     log_analytics_summary,
@@ -520,6 +521,7 @@ def ask_question(payload: Query, current_user: AuthenticatedUser = Depends(verif
         "grounded": result.get("grounded", False),
         "reason": result.get("reason", ""),
         "attempts": result.get("attempts", 1),
+        "sources": result.get("sources", []),
     })
 
     if payload.chat_id:

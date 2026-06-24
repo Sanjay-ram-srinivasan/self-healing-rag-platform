@@ -10,6 +10,7 @@ openpyxl
 python-docx
 python-pptx
 pypdf
+reportlab
 python-multipart
 python-dotenv
 firebase-admin
