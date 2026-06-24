@@ -34,7 +34,7 @@ export default function AnalyticsPage({ documentsCount }) {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [dateRange, setDateRange] = useState("today");
+  const [dateRange, setDateRange] = useState("7d");
   const [customRange, setCustomRange] = useState({ start: "", end: "" });
   const [exportOpen, setExportOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
@@ -140,7 +140,7 @@ export default function AnalyticsPage({ documentsCount }) {
             </div>
             <div className="flex flex-wrap gap-3">
               <div className="flex rounded-md border border-line bg-paper p-1">
-                {["All", "Today", "7d", "30d", "Custom"].map((range) => (
+                {["7d", "30d", "Custom"].map((range) => (
                   <button
                     key={range}
                     type="button"
@@ -153,9 +153,9 @@ export default function AnalyticsPage({ documentsCount }) {
               </div>
               {dateRange === "custom" && (
                 <div className="flex items-center gap-2 rounded-md border border-line bg-paper px-3 py-2">
-                  <input type="date" className="bg-transparent text-xs font-bold" onChange={(e) => setCustomRange((p) => ({ ...p, start: e.target.value }))} />
+                  <input type="date" className="bg-transparent text-xs font-bold" value={customRange.start} onChange={(e) => setCustomRange((p) => ({ ...p, start: e.target.value }))} />
                   <span className="text-muted">-</span>
-                  <input type="date" className="bg-transparent text-xs font-bold" onChange={(e) => setCustomRange((p) => ({ ...p, end: e.target.value }))} />
+                  <input type="date" className="bg-transparent text-xs font-bold" value={customRange.end} onChange={(e) => setCustomRange((p) => ({ ...p, end: e.target.value }))} />
                 </div>
               )}
               <div className="relative">
