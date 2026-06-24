@@ -28,6 +28,22 @@ const workflowBase = [
   { label: "Critic Agent", detail: "Context repair if needed", state: "pending" },
 ];
 
+const formatChatTimestamp = (timestamp) => {
+  if (!timestamp) return "No activity yet";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "No activity yet";
+  const dateText = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+  const timeText = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  return `${dateText} • ${timeText}`;
+};
+
 export default function ChatPage({ currentChatId, setCurrentChatId }) {
   const chatInputRef = useRef(null);
   const [question, setQuestion] = useState("");
@@ -47,6 +63,12 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
 
   const lastResponse = useMemo(() => [...messages].reverse().find((item) => item.type === "answer"), [messages]);
   const exampleQuestions = ["What can you help me with?", "Summarize my documents.", "How does this platform verify answers?"];
+  const collectionNames = useMemo(() => {
+    return collections.reduce((acc, collection) => {
+      acc[collection.id] = collection.name;
+      return acc;
+    }, {});
+  }, [collections]);
 
   useEffect(() => {
     const handleShortcut = (event) => {
@@ -133,7 +155,8 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
     let targetChatId = currentChatId;
     if (!targetChatId) {
        try {
-         const newChat = await createChat(cleanQuestion.slice(0, 30) + (cleanQuestion.length > 30 ? "..." : ""));
+         const collectionId = selectedCollection === "all" ? null : selectedCollection;
+         const newChat = await createChat(cleanQuestion.slice(0, 30) + (cleanQuestion.length > 30 ? "..." : ""), collectionId);
          targetChatId = newChat.chat_id;
          setCurrentChatId(targetChatId);
          setChats(curr => [newChat, ...curr]);
@@ -169,6 +192,20 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
           searchSource: result.search_source || "Documents",
         },
       ]);
+      setChats((current) => {
+        const updatedAt = new Date().toISOString();
+        const nextChats = current.map((chat) => (
+          chat.chat_id === targetChatId
+            ? {
+                ...chat,
+                collection_id: selectedCollection === "all" ? null : selectedCollection,
+                updated_at: updatedAt,
+                created_at: chat.created_at || updatedAt,
+              }
+            : chat
+        ));
+        return nextChats.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      });
     } catch (apiError) {
       setError(apiError.response?.data?.detail || apiError.message || "The question could not be answered.");
     } finally {
@@ -229,13 +266,14 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
                        <p className="mb-2 text-xs font-bold text-[#A18478]">Today</p>
                        <div className="space-y-1">
                            {groupedChats.today.map((chat) => (
-                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
-                                 <div className="flex items-center gap-3 min-w-0">
-                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
-                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
-                                 </div>
-                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
-                               </div>
+                               <ChatHistoryRow
+                                 key={chat.chat_id}
+                                 chat={chat}
+                                 collectionName={collectionNames[chat.collection_id] || "All Collections"}
+                                 isActive={currentChatId === chat.chat_id}
+                                 onSelect={() => setCurrentChatId(chat.chat_id)}
+                                 onDelete={(event) => { event.stopPropagation(); handleDeleteChat(chat.chat_id); }}
+                               />
                            ))}
                        </div>
                    </div>
@@ -245,13 +283,14 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
                        <p className="mb-2 text-xs font-bold text-[#A18478]">Yesterday</p>
                        <div className="space-y-1">
                            {groupedChats.yesterday.map((chat) => (
-                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
-                                 <div className="flex items-center gap-3 min-w-0">
-                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
-                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
-                                 </div>
-                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
-                               </div>
+                               <ChatHistoryRow
+                                 key={chat.chat_id}
+                                 chat={chat}
+                                 collectionName={collectionNames[chat.collection_id] || "All Collections"}
+                                 isActive={currentChatId === chat.chat_id}
+                                 onSelect={() => setCurrentChatId(chat.chat_id)}
+                                 onDelete={(event) => { event.stopPropagation(); handleDeleteChat(chat.chat_id); }}
+                               />
                            ))}
                        </div>
                    </div>
@@ -261,13 +300,14 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
                        <p className="mb-2 text-xs font-bold text-[#A18478]">Older</p>
                        <div className="space-y-1">
                            {groupedChats.older.map((chat) => (
-                               <div key={chat.chat_id} className={`group relative flex items-center justify-between rounded-md p-3 cursor-pointer ${currentChatId === chat.chat_id ? "bg-paper border border-line" : "hover:bg-paper"}`} onClick={() => setCurrentChatId(chat.chat_id)}>
-                                 <div className="flex items-center gap-3 min-w-0">
-                                    <MessageSquare size={16} className={currentChatId === chat.chat_id ? "text-accent" : "text-muted"} />
-                                    <p className={`truncate text-sm font-semibold ${currentChatId === chat.chat_id ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
-                                 </div>
-                                 <button onClick={(e) => { e.stopPropagation(); handleDeleteChat(chat.chat_id); }} className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-600 transition"><Trash2 size={14} /></button>
-                               </div>
+                               <ChatHistoryRow
+                                 key={chat.chat_id}
+                                 chat={chat}
+                                 collectionName={collectionNames[chat.collection_id] || "All Collections"}
+                                 isActive={currentChatId === chat.chat_id}
+                                 onSelect={() => setCurrentChatId(chat.chat_id)}
+                                 onDelete={(event) => { event.stopPropagation(); handleDeleteChat(chat.chat_id); }}
+                               />
                            ))}
                        </div>
                    </div>
@@ -438,6 +478,40 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
         </div>
       </aside>
     </main>
+    </div>
+  );
+}
+
+function ChatHistoryRow({ chat, collectionName, isActive, onSelect, onDelete }) {
+  return (
+    <div
+      className={`group relative cursor-pointer rounded-md p-3 pr-9 transition ${isActive ? "border border-line bg-paper" : "hover:bg-paper"}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <MessageSquare size={16} className={`mt-0.5 shrink-0 ${isActive ? "text-accent" : "text-muted"}`} />
+        <div className="min-w-0 flex-1">
+          <p className={`truncate text-sm font-semibold ${isActive ? "text-ink" : "text-[#594A42]"}`}>{chat.title}</p>
+          <p className="mt-1 truncate text-[11px] font-semibold text-[#6A4034]">📂 {collectionName}</p>
+          <p className="mt-0.5 truncate text-[11px] font-semibold text-muted">🕒 {formatChatTimestamp(chat.updated_at || chat.created_at)}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="absolute right-3 top-3 text-muted opacity-0 transition hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
+        aria-label={`Delete ${chat.title}`}
+      >
+        <Trash2 size={14} />
+      </button>
     </div>
   );
 }

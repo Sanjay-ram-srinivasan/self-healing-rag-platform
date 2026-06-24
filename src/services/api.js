@@ -81,8 +81,8 @@ export const fetchChats = async () => {
   return data;
 };
 
-export const createChat = async (title) => {
-  const { data } = await api.post("/api/chats", { title });
+export const createChat = async (title, collectionId = null) => {
+  const { data } = await api.post("/api/chats", { title, collection_id: collectionId });
   return data;
 };
 

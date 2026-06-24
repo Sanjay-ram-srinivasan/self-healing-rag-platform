@@ -467,6 +467,7 @@ def export_analytics(
 
 class ChatCreate(BaseModel):
     title: str
+    collection_id: str | None = None
 
 
 
@@ -526,6 +527,7 @@ def ask_question(payload: Query, current_user: AuthenticatedUser = Depends(verif
             payload.chat_id,
             current_user.uid,
             {"type": "question", "text": payload.question, "timestamp": datetime.utcnow().isoformat()},
+            collection_id=payload.collection_id,
         )
         append_message(
             payload.chat_id,
@@ -541,9 +543,31 @@ def ask_question(payload: Query, current_user: AuthenticatedUser = Depends(verif
                 "sources": result.get("sources", []),
                 "searchSource": result.get("search_source", "Documents"),
             },
+            collection_id=payload.collection_id,
         )
 
     return result
+
+@app.get("/api/chats")
+@app.get("/chats")
+def list_chats_endpoint(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+    return {"chats": get_user_chats(current_user.uid)}
+
+@app.post("/api/chats")
+@app.post("/chats")
+def create_chat_endpoint(payload: ChatCreate, current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+    chat = create_chat(
+        current_user.uid,
+        payload.title,
+        collection_id=payload.collection_id,
+    )
+    return chat
+
+# Search chats by title
+@app.get("/api/chats/search")
+@app.get("/chats/search")
+def search_chats_endpoint(query: str = "", current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+    return {"chats": search_chats(current_user.uid, query)}
 
 @app.get("/api/chats/{chat_id}")
 @app.get("/chats/{chat_id}")
@@ -573,13 +597,6 @@ def update_chat_endpoint(chat_id: str, payload: ChatUpdate, current_user: Authen
     if not updated:
         raise HTTPException(status_code=404, detail="Chat not found or not authorized")
     return {"updated": True}
-
-# Search chats by title
-@app.get("/api/chats/search")
-@app.get("/chats/search")
-def search_chats_endpoint(query: str = "", current_user: AuthenticatedUser = Depends(verify_firebase_token)):
-    return {"chats": search_chats(current_user.uid, query)}
-
 
 @app.get("/api/collections")
 @app.get("/collections")
