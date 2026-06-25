@@ -26,7 +26,15 @@ from backend.analytics import (
 from backend.auth import AuthenticatedUser, verify_firebase_token
 from backend.chat_history_store import ChatPersistenceError, create_chat, get_user_chats, get_chat, delete_chat, append_message, update_chat, search_chats
 from backend.collections_store import load_collections, create_collection, delete_collection, find_collection
-from backend.document_store import delete_from_storage, sync_from_storage, upload_to_storage
+from backend.document_store import (
+    delete_from_storage,
+    delete_document_meta,
+    get_document_meta,
+    list_all_document_meta,
+    save_document_meta,
+    sync_from_storage,
+    upload_to_storage,
+)
 from backend.persistence import get_firestore_client
 from backend.settings_store import load_settings, save_settings
 from backend.classification import build_direct_response, classify_query
@@ -38,41 +46,9 @@ from backend.ingestion.embeddings import store_documents
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
-META_FILE = os.path.join(BASE_DIR, "data", "documents_meta.json")
 
 logger = logging.getLogger(__name__)
 FALLBACK_MESSAGE = "I couldn't find enough relevant information in the uploaded documents to answer this question confidently."
-
-
-def _load_meta():
-    """Load document metadata from Firestore; fallback to local JSON file if Firestore unavailable."""
-    client = get_firestore_client()
-    if client:
-        doc_ref = client.collection('metadata').document('documents_meta')
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict()
-    # Fallback to local file
-    os.makedirs(os.path.dirname(META_FILE), exist_ok=True)
-    if os.path.exists(META_FILE):
-        try:
-            with open(META_FILE, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except Exception:
-            pass
-    return {}
-
-
-def _save_meta(meta):
-    os.makedirs(os.path.dirname(META_FILE), exist_ok=True)
-    with open(META_FILE, "w", encoding="utf-8") as file:
-        json.dump(meta, file, indent=2)
-    client = get_firestore_client()
-    if client:
-        doc_ref = client.collection('metadata').document('documents_meta')
-        doc_ref.set(meta)
-        return True
-    return False
 
 
 def _index_document_file(file_path, filename, file_meta):
@@ -101,37 +77,55 @@ app.add_middleware(
 
 @app.on_event("startup")
 def hydrate_persistent_storage():
-    # Restore any files that were uploaded to Firebase Storage but not present locally.
-    restored_files = sync_from_storage()
-    if restored_files:
-        logger.info("Restored %s uploaded files from Firebase Storage.", restored_files)
+    """
+    Startup hook — runs once when the FastAPI process starts.
 
-    # Ensure vector store (Chroma) is populated. If empty, rebuild from all persisted documents.
+    1. Downloads any uploaded files from Firebase Storage that are not already
+       present on the local ephemeral disk.
+    2. If the Chroma vector store is empty (fresh Railway container), rebuilds
+       it by re-indexing every restored document.
+    3. Syncs chat history from Firestore.
+    """
+    # Step 1: restore files from Firebase Storage + collect their metadata
+    logger.info("[Startup] Syncing documents from Firebase Storage…")
+    try:
+        restored_docs = sync_from_storage()  # list[(filename, meta)]
+        logger.info("[Startup] %d documents available locally after sync.", len(restored_docs))
+    except Exception:
+        logger.error("[Startup] sync_from_storage() failed.", exc_info=True)
+        restored_docs = []
+
+    # Step 2: rebuild Chroma vector store if empty
     try:
         from backend.vectorstore.chroma import get_vectorstore
         vectorstore = get_vectorstore()
-        # Chroma's .get() returns a dict with a 'documents' key.
-        docs = vectorstore.get().get("documents", [])
-        if not docs:
-            logger.info("Vector store empty; rebuilding from uploaded documents.")
-            meta = _load_meta()
-            for fname in os.listdir(UPLOAD_DIR):
-                file_path = os.path.join(UPLOAD_DIR, fname)
-                if os.path.isfile(file_path):
-                    file_meta = meta.get(fname, {})
-                    if not file_meta:
-                        logger.warning("Skipping %s during vector rebuild because metadata is missing.", fname)
-                        continue
-                    _index_document_file(file_path, fname, file_meta)
-    except Exception as e:
-        logger.warning("Failed to verify or rebuild vector store: %s", e, exc_info=True)
+        existing_docs = vectorstore.get().get("documents", [])
+        if not existing_docs:
+            logger.info("[Startup] Vector store is empty — rebuilding from %d documents.", len(restored_docs))
+            indexed = 0
+            for filename, file_meta in restored_docs:
+                file_path = os.path.join(UPLOAD_DIR, filename)
+                if not os.path.isfile(file_path):
+                    logger.warning("[Startup] Skipping %s — file not on disk.", filename)
+                    continue
+                try:
+                    _index_document_file(file_path, filename, file_meta)
+                    indexed += 1
+                    logger.info("[Startup] Indexed %s into vector store.", filename)
+                except Exception:
+                    logger.error("[Startup] Failed to index %s.", filename, exc_info=True)
+            logger.info("[Startup] Vector store rebuild complete — %d/%d documents indexed.", indexed, len(restored_docs))
+        else:
+            logger.info("[Startup] Vector store already populated (%d chunks).", len(existing_docs))
+    except Exception:
+        logger.error("[Startup] Vector store check/rebuild failed.", exc_info=True)
 
-    # Sync chat history from Firestore to local cache on startup.
+    # Step 3: sync chat history from Firestore
     try:
         from backend.chat_history_store import sync_chats_from_firestore
         sync_chats_from_firestore()
     except Exception:
-        logger.warning("Chat history sync on startup failed.", exc_info=True)
+        logger.warning("[Startup] Chat history sync failed.", exc_info=True)
 
 
 class Query(BaseModel):
@@ -161,14 +155,20 @@ async def upload_document(
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     file_path = os.path.join(UPLOAD_DIR, file.filename)
 
+    # 1. Write to local disk
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    # 2. Upload to Firebase Storage (required — this is the permanent store)
     if not upload_to_storage(file.filename):
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=503, detail="Firebase Storage is unavailable. Document was not persisted.")
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase Storage is unavailable. Document was not persisted.",
+        )
 
+    # 3. Parse and index into Chroma
     documents = load_document(file_path)
     chunks = chunk_documents(documents)
 
@@ -179,12 +179,11 @@ async def upload_document(
             chunk.metadata["collection_id"] = collection_id
     store_documents(chunks)
 
+    # 4. Save per-document metadata to Firestore
     file_size = os.path.getsize(file_path)
-    meta = _load_meta()
-    
     ocr_used = any(doc.metadata.get("ocr_used", False) for doc in documents)
-    
-    meta[file.filename] = {
+    file_meta = {
+        "filename": file.filename,
         "pages": len(documents),
         "chunks": len(chunks),
         "collection_id": collection_id,
@@ -194,12 +193,20 @@ async def upload_document(
         "uploaded_at": datetime.now().isoformat(),
         "status": "indexed",
     }
-    if not _save_meta(meta):
+    if not save_document_meta(file.filename, file_meta):
+        # Metadata failed — roll back Storage upload and local file
         delete_from_storage(file.filename)
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=503, detail="Firestore is unavailable. Document metadata was not persisted.")
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore is unavailable. Document metadata was not persisted.",
+        )
 
+    logger.info(
+        "[Upload] %s uploaded by %s — %d pages, %d chunks.",
+        file.filename, current_user.uid, len(documents), len(chunks),
+    )
     return {
         "message": "Document uploaded and indexed successfully",
         "filename": file.filename,
@@ -209,42 +216,75 @@ async def upload_document(
         "size_bytes": file_size,
         "size_kb": round(file_size / 1024, 2),
         "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "indexed"
+        "status": "indexed",
     }
 
 
 @app.get("/api/documents")
 @app.get("/documents")
 def get_documents(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+    """
+    List documents for the current user.
+    Uses Firestore as the source of truth; falls back to scanning the local
+    uploads directory if Firestore is unavailable.
+    """
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    documents = []
-    meta = _load_meta()
 
-    for fname in os.listdir(UPLOAD_DIR):
+    # Primary source: Firestore per-document metadata
+    all_meta = list_all_document_meta()  # dict[filename -> meta]
+
+    # Fallback: scan local disk if Firestore returned nothing
+    if not all_meta:
+        logger.warning("[Documents] Firestore metadata unavailable; falling back to local disk scan.")
+        for fname in os.listdir(UPLOAD_DIR):
+            fp = os.path.join(UPLOAD_DIR, fname)
+            if os.path.isfile(fp):
+                all_meta[fname] = {
+                    "filename": fname,
+                    "user_id": None,
+                    "size_bytes": os.path.getsize(fp),
+                    "pages": 0,
+                    "chunks": 0,
+                    "status": "indexed",
+                    "uploaded_at": datetime.fromtimestamp(os.path.getctime(fp)).isoformat(),
+                }
+
+    documents = []
+    for fname, file_meta in all_meta.items():
+        # Filter to this user's documents only.
+        # uid=None is a fallback-mode stub — show it to whoever is logged in.
+        owner = file_meta.get("user_id")
+        if owner is not None and owner != current_user.uid:
+            continue
+
+        # Get size from disk if available, otherwise use stored metadata
         file_path = os.path.join(UPLOAD_DIR, fname)
-        if not os.path.isfile(file_path):
-            continue
-            
-        file_meta = meta.get(fname, {})
-        if file_meta.get("user_id") != current_user.uid:
-            continue
-            
-        file_size = os.path.getsize(file_path)
+        size_bytes = (
+            os.path.getsize(file_path)
+            if os.path.isfile(file_path)
+            else file_meta.get("size_bytes", 0)
+        )
+
         documents.append({
             "id": fname,
             "name": fname,
             "filename": fname,
-            "size_bytes": file_size,
-            "size_kb": round(file_size / 1024, 2),
+            "size_bytes": size_bytes,
+            "size_kb": round(size_bytes / 1024, 2),
             "pages": file_meta.get("pages", 0),
             "chunks": file_meta.get("chunks", 0),
             "status": file_meta.get("status", "indexed"),
-            "uploaded_at": file_meta.get("uploaded_at") or datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+            "uploaded_at": (
+                file_meta.get("uploaded_at")
+                or datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+                if os.path.isfile(file_path)
+                else file_meta.get("uploaded_at", "")
+            ),
         })
 
     return {
         "count": len(documents),
-        "documents": documents
+        "documents": documents,
     }
 
 
@@ -254,24 +294,28 @@ def delete_document(
     filename: str,
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
 ):
+    # Authorise via Firestore metadata (works even if local file is gone)
+    file_meta = get_document_meta(filename)
+    if not file_meta or file_meta.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=404, detail="File not found or not authorized.")
+
+    # Delete local copy (best-effort — may not be present after a redeploy)
     file_path = os.path.join(UPLOAD_DIR, filename)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except OSError:
+            logger.warning("[Delete] Could not remove local file %s.", filename, exc_info=True)
 
-    meta = _load_meta()
-    if meta.get(filename, {}).get("user_id") != current_user.uid:
-        return {"error": "File not found or not authorized"}
-
-    if not os.path.exists(file_path):
-        return {"error": "File not found"}
-
-    os.remove(file_path)
+    # Delete from Firebase Storage
     if not delete_from_storage(filename):
-        logger.warning("Could not delete %s from Firebase Storage.", filename)
-    meta = _load_meta()
-    if filename in meta:
-        del meta[filename]
-        if not _save_meta(meta):
-            raise HTTPException(status_code=503, detail="Firestore is unavailable. Document metadata was not updated.")
+        logger.warning("[Delete] Could not delete %s from Firebase Storage.", filename)
 
+    # Delete metadata from Firestore
+    if not delete_document_meta(filename):
+        logger.warning("[Delete] Could not delete Firestore metadata for %s.", filename)
+
+    logger.info("[Delete] %s deleted by %s.", filename, current_user.uid)
     return {"message": f"{filename} deleted successfully"}
 
 
@@ -280,28 +324,25 @@ def reindex_document(
     filename: str,
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
 ):
+    file_meta = get_document_meta(filename)
+    if not file_meta or file_meta.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=404, detail="File not found or not authorized.")
+
     file_path = os.path.join(UPLOAD_DIR, filename)
-
-    meta = _load_meta()
-    file_meta = meta.get(filename, {})
-    if file_meta.get("user_id") != current_user.uid:
-        return {"error": "File not found or not authorized"}
-
     if not os.path.exists(file_path):
-        return {"error": "File not found"}
+        raise HTTPException(status_code=404, detail="File not on local disk; it will be restored on next startup.")
 
     documents, chunks = _index_document_file(file_path, filename, file_meta)
 
-    meta = _load_meta()
-    meta[filename] = {
+    updated_meta = {
         **file_meta,
         "pages": len(documents),
         "chunks": len(chunks),
         "status": "indexed",
         "reindexed_at": datetime.now().isoformat(),
     }
-    if not _save_meta(meta):
-        raise HTTPException(status_code=503, detail="Firestore is unavailable. Document metadata was not updated.")
+    if not save_document_meta(filename, updated_meta):
+        logger.warning("[Reindex] Firestore metadata update failed for %s.", filename)
 
     return {
         "message": f"{filename} re-indexed successfully",
