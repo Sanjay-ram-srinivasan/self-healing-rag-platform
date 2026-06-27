@@ -169,22 +169,24 @@ export default function ChatPage({ currentChatId, setCurrentChatId }) {
       console.error("Failed to pin chat", err);
     }
   };
-
   const handleFileChange = async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setUploading(true);
+    setError("");
     try {
       for (const file of files) {
-        await uploadDocument(file, selectedCollection === "all" ? null : selectedCollection);
+        const result = await uploadDocument(file, selectedCollection === "all" ? null : selectedCollection);
+        if (result.error) throw new Error(result.error);
       }
     } catch (err) {
       console.error('Upload failed', err);
+      setError(err.response?.data?.detail || err.message || "Upload failed.");
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
     const cleanQuestion = question.trim();

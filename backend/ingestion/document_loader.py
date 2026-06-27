@@ -1,14 +1,15 @@
-from langchain_core.documents import Document
-from langchain_community.document_loaders import PyPDFLoader
-
-from docx import Document as DocxDocument
-from pptx import Presentation
-
-import pandas as pd
 import os
+import logging
+import pandas as pd
 import pytesseract
 from PIL import Image
 from pdf2image import convert_from_path
+from docx import Document as DocxDocument
+from pptx import Presentation
+from langchain_core.documents import Document
+from langchain_community.document_loaders import PyPDFLoader
+
+logger = logging.getLogger(__name__)
 
 def load_document(file_path):
     filename = os.path.basename(file_path)
@@ -29,16 +30,24 @@ def load_document(file_path):
         # Check if it's a scanned PDF (no text found)
         total_text = "".join([d.page_content for d in docs]).strip()
         if not total_text:
-            # Fallback to OCR
-            images = convert_from_path(file_path)
-            ocr_docs = []
-            for i, img in enumerate(images):
-                text = pytesseract.image_to_string(img)
-                ocr_docs.append(Document(
-                    page_content=text,
-                    metadata={"source": filename, "page": i + 1, "ocr_used": True}
-                ))
-            return ocr_docs
+            logger.info("[Loader] PDF has no extracted text; falling back to OCR processing.")
+            try:
+                images = convert_from_path(file_path)
+                ocr_docs = []
+                for i, img in enumerate(images):
+                    text = pytesseract.image_to_string(img)
+                    ocr_docs.append(Document(
+                        page_content=text,
+                        metadata={"source": filename, "page": i + 1, "ocr_used": True}
+                    ))
+                logger.info("[Loader] Successfully completed OCR for scanned PDF: %s", filename)
+                return ocr_docs
+            except Exception as e:
+                logger.error("[Loader] PDF OCR failed. System binaries (poppler or tesseract) may be missing.", exc_info=True)
+                raise ValueError(
+                    "This PDF appears to be scanned and requires server-side OCR. "
+                    f"OCR processing failed because system packages are missing or misconfigured: {str(e)}"
+                )
 
         return docs
 
@@ -168,19 +177,26 @@ def load_document(file_path):
 
     # Images (OCR)
     elif extension in [".jpg", ".jpeg", ".png"]:
-        
-        img = Image.open(file_path)
-        text = pytesseract.image_to_string(img)
-        
-        return [
-            Document(
-                page_content=text,
-                metadata={
-                    "source": filename,
-                    "ocr_used": True
-                }
+        logger.info("[Loader] Attempting OCR for image file: %s", filename)
+        try:
+            img = Image.open(file_path)
+            text = pytesseract.image_to_string(img)
+            logger.info("[Loader] Successfully completed OCR for image: %s", filename)
+            return [
+                Document(
+                    page_content=text,
+                    metadata={
+                        "source": filename,
+                        "ocr_used": True
+                    }
+                )
+            ]
+        except Exception as e:
+            logger.error("[Loader] Image OCR failed. Tesseract binary may be missing.", exc_info=True)
+            raise ValueError(
+                "Image uploads require server-side OCR. "
+                f"OCR processing failed because Tesseract is missing or misconfigured: {str(e)}"
             )
-        ]
 
     else:
 

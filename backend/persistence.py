@@ -14,12 +14,30 @@ _firebase_lock = threading.Lock()
 def _service_account_payload():
     payload = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
     if payload:
-        return json.loads(payload)
+        payload_str = payload.strip()
+        if payload_str.startswith("{"):
+            try:
+                return json.loads(payload_str)
+            except Exception as exc:
+                logger.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON as inline JSON: %s", exc)
+        else:
+            # Treat as file path
+            if os.path.exists(payload_str):
+                try:
+                    with open(payload_str, "r", encoding="utf-8") as file:
+                        return json.load(file)
+                except Exception as exc:
+                    logger.error("Failed to read FIREBASE_SERVICE_ACCOUNT_JSON from file path %s: %s", payload_str, exc)
+            else:
+                logger.warning("FIREBASE_SERVICE_ACCOUNT_JSON file path does not exist: %s", payload_str)
 
     path = os.getenv("FIREBASE_SERVICE_ACCOUNT")
     if path and os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except Exception as exc:
+            logger.error("Failed to read FIREBASE_SERVICE_ACCOUNT file %s: %s", path, exc)
 
     return None
 
@@ -30,14 +48,24 @@ def get_firebase_app():
             return firebase_admin.get_app()
         except ValueError:
             payload = _service_account_payload()
+            bucket_name = os.getenv("FIREBASE_BUCKET") or os.getenv("VITE_FIREBASE_STORAGE_BUCKET")
+            
+            # Make sure bucket name is clean (e.g. remove gs:// prefix if present)
+            if bucket_name:
+                bucket_name = bucket_name.strip()
+                if bucket_name.startswith("gs://"):
+                    bucket_name = bucket_name[5:]
+                if bucket_name.endswith("/"):
+                    bucket_name = bucket_name[:-1]
+
+            options = {"storageBucket": bucket_name} if bucket_name else None
+            
             if payload:
-                bucket_name = os.getenv("FIREBASE_BUCKET")
-                options = {"storageBucket": bucket_name} if bucket_name else None
+                logger.info("[Firebase] Initializing app with service account credentials and bucket: %s", bucket_name)
                 cred = credentials.Certificate(payload)
                 return firebase_admin.initialize_app(cred, options)
 
-            default_bucket = os.getenv("FIREBASE_BUCKET")
-            options = {"storageBucket": default_bucket} if default_bucket else None
+            logger.info("[Firebase] Initializing app with default credentials and bucket: %s", bucket_name)
             return firebase_admin.initialize_app(options=options)
 
 

@@ -18,6 +18,19 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (!error.response) {
+      console.error("[API Network/CORS Error]", error);
+      error.message = `Network Error: Verify that the backend is running at ${api.defaults.baseURL} and CORS is allowed.`;
+    } else {
+      console.error(`[API Error ${error.response.status}]`, error.response.data);
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const askQuestion = async (payload) => {
   const { data } = await api.post("/api/chat", payload);
   return data;

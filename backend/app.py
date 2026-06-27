@@ -66,10 +66,16 @@ def _index_document_file(file_path, filename, file_meta):
 
 app = FastAPI(title="Self-Healing RAG Platform")
 
+cors_origins_str = os.getenv("CORS_ALLOWED_ORIGINS", "")
+if cors_origins_str:
+    origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+else:
+    origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=True if origins != ["*"] else False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -134,9 +140,10 @@ class Query(BaseModel):
     chat_id: str | None = None
 
 
-@app.get("/")
-def root():
-    return {"message": "Self-Healing RAG Running"}
+@app.get("/api/health")
+@app.get("/health")
+def health():
+    return {"status": "ok", "message": "Self-Healing RAG Running"}
 
 
 @app.post("/api/documents/upload")
@@ -146,41 +153,91 @@ async def upload_document(
     collection_id: str | None = None,
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
 ):
+    logger.info(
+        "[Upload] Incoming upload request: filename=%s, collection_id=%s, user_id=%s",
+        file.filename, collection_id, current_user.uid
+    )
+    
     allowed_extensions = [".pdf", ".docx", ".pptx", ".txt", ".md", ".csv", ".xlsx", ".jpg", ".jpeg", ".png"]
     extension = os.path.splitext(file.filename)[1].lower()
 
     if extension not in allowed_extensions:
-        return {"error": f"Unsupported file type: {extension}"}
+        logger.warning("[Upload] Unsupported file type: %s", extension)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {extension}. Allowed formats: {', '.join(allowed_extensions)}"
+        )
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     file_path = os.path.join(UPLOAD_DIR, file.filename)
+    logger.info("[Upload] Local destination path: %s", file_path)
 
     # 1. Write to local disk
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        file_size = os.path.getsize(file_path)
+        logger.info("[Upload] Local copy saved. Size: %d bytes (%s KB)", file_size, round(file_size / 1024, 2))
+    except Exception as e:
+        logger.error("[Upload] Failed to write file locally: %s", file.filename, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save file on the server disk: {str(e)}"
+        )
 
     # 2. Upload to Firebase Storage (required — this is the permanent store)
+    logger.info("[Upload] Persisting %s to Firebase Storage...", file.filename)
     if not upload_to_storage(file.filename):
+        logger.error("[Upload] Firebase Storage upload failed for: %s", file.filename)
         if os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(
             status_code=503,
             detail="Firebase Storage is unavailable. Document was not persisted.",
         )
+    logger.info("[Upload] Firebase Storage upload successful: %s", file.filename)
 
     # 3. Parse and index into Chroma
-    documents = load_document(file_path)
-    chunks = chunk_documents(documents)
+    try:
+        logger.info("[Upload] Parsing file content: %s", file.filename)
+        documents = load_document(file_path)
+        logger.info("[Upload] Parsing completed. Loaded %d pages.", len(documents))
 
-    for chunk in chunks:
-        chunk.metadata["user_id"] = current_user.uid
-        chunk.metadata["filename"] = file.filename
-        if collection_id:
-            chunk.metadata["collection_id"] = collection_id
-    store_documents(chunks)
+        logger.info("[Upload] Chunking documents: %s", file.filename)
+        chunks = chunk_documents(documents)
+        logger.info("[Upload] Chunking completed. Generated %d chunks.", len(chunks))
+
+        for chunk in chunks:
+            chunk.metadata["user_id"] = current_user.uid
+            chunk.metadata["filename"] = file.filename
+            if collection_id:
+                chunk.metadata["collection_id"] = collection_id
+
+        logger.info("[Upload] Indexing %d chunks into ChromaDB...", len(chunks))
+        store_documents(chunks)
+        logger.info("[Upload] ChromaDB indexing completed.")
+    except ValueError as val_err:
+        logger.warning("[Upload] Validation/OCR error during parsing: %s", str(val_err))
+        # Roll back Storage upload and local file
+        delete_from_storage(file.filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(
+            status_code=400,
+            detail=str(val_err)
+        )
+    except Exception as exc:
+        logger.error("[Upload] Unexpected error during indexing: %s", file.filename, exc_info=True)
+        # Roll back Storage upload and local file
+        delete_from_storage(file.filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process and index document content: {str(exc)}"
+        )
 
     # 4. Save per-document metadata to Firestore
-    file_size = os.path.getsize(file_path)
     ocr_used = any(doc.metadata.get("ocr_used", False) for doc in documents)
     file_meta = {
         "filename": file.filename,
@@ -193,7 +250,10 @@ async def upload_document(
         "uploaded_at": datetime.now().isoformat(),
         "status": "indexed",
     }
+    
+    logger.info("[Upload] Saving document metadata to Firestore: %s", file_meta)
     if not save_document_meta(file.filename, file_meta):
+        logger.error("[Upload] Firestore metadata update failed for: %s", file.filename)
         # Metadata failed — roll back Storage upload and local file
         delete_from_storage(file.filename)
         if os.path.exists(file_path):
@@ -204,7 +264,7 @@ async def upload_document(
         )
 
     logger.info(
-        "[Upload] %s uploaded by %s — %d pages, %d chunks.",
+        "[Upload] %s uploaded by %s successfully — %d pages, %d chunks.",
         file.filename, current_user.uid, len(documents), len(chunks),
     )
     return {
@@ -934,3 +994,16 @@ async def stream_logs():
                 await asyncio.sleep(2)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# Serve static frontend files if built
+frontend_dist_path = os.path.join(BASE_DIR, "dist")
+if os.path.exists(frontend_dist_path):
+    from fastapi.staticfiles import StaticFiles
+    logger.info("[Startup] Mounting frontend static files from: %s", frontend_dist_path)
+    app.mount("/", StaticFiles(directory=frontend_dist_path, html=True), name="frontend")
+else:
+    logger.info("[Startup] Frontend build directory not found at: %s. Running in API-only mode.", frontend_dist_path)
+    @app.get("/")
+    def root():
+        return {"status": "ok", "message": "Self-Healing RAG Running (API-only mode)"}

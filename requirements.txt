@@ -21,3 +21,4 @@ duckduckgo-search
 langchain-huggingface
 sentence-transformers
 torch
+pysqlite3-binary
