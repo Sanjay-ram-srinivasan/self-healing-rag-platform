@@ -1,4 +1,5 @@
 import asyncio
+from io import BytesIO
 import json
 import logging
 import os
@@ -9,9 +10,9 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(na
 import shutil
 from datetime import datetime
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile, Query as QueryParam
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Query as QueryParam
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.analytics import (
@@ -92,6 +93,15 @@ def hydrate_persistent_storage():
        it by re-indexing every restored document.
     3. Syncs chat history from Firestore.
     """
+    try:
+        import reportlab
+        print(f"ReportLab Version: {reportlab.Version}", flush=True)
+        logger.info("[Startup] ReportLab Version: %s", reportlab.Version)
+    except ImportError:
+        logger.error("[Startup] ReportLab package is not installed on the server.", exc_info=True)
+    except Exception:
+        logger.error("[Startup] ReportLab startup diagnostic failed.", exc_info=True)
+
     # Step 1: restore files from Firebase Storage + collect their metadata
     logger.info("[Startup] Syncing documents from Firebase Storage…")
     try:
@@ -468,7 +478,6 @@ def export_analytics(
     start_date: str | None = QueryParam(default=None, alias="start_date"),
     end_date: str | None = QueryParam(default=None, alias="end_date"),
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
-    background_tasks: BackgroundTasks = None,
 ):
     """Export analytics data as JSON or PDF for download.
     Default format is JSON. Use `format=pdf` for PDF output.
@@ -590,189 +599,141 @@ def export_analytics(
     # ── PDF export ─────────────────────────────────────────────────────────────
     if fmt == "pdf":
         try:
-            from reportlab.lib.pagesizes import letter
             from reportlab.lib import colors
-            from reportlab.pdfgen import canvas as rl_canvas
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
         except ImportError as exc:
             logger.error("[Export] ReportLab not installed: %s", exc)
-            raise HTTPException(status_code=500, detail="PDF generation library (reportlab) is not installed.")
+            raise HTTPException(
+                status_code=500,
+                detail="ReportLab package is not installed on the server.",
+            )
 
-        import tempfile
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_path = tmp_file.name
+            pdf_buffer = BytesIO()
+            doc = SimpleDocTemplate(
+                pdf_buffer,
+                pagesize=letter,
+                rightMargin=40,
+                leftMargin=40,
+                topMargin=44,
+                bottomMargin=36,
+                title="Analytics Report",
+            )
+            styles = getSampleStyleSheet()
+            title_style = styles["Title"]
+            heading_style = styles["Heading2"]
+            normal_style = styles["BodyText"]
 
-            c = rl_canvas.Canvas(tmp_path, pagesize=letter)
-            page_width, page_height = letter
+            def _pct(value):
+                return f"{float(value or 0):.1f}%"
 
-            def _new_page_if_needed(y_pos, min_y=80):
-                if y_pos < min_y:
-                    c.showPage()
-                    return page_height - 60
-                return y_pos
+            def _table(rows):
+                table = Table(rows, colWidths=[230, 250], hAlign="LEFT")
+                table.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5DFD2")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#6A2A05")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E2D8CF")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FDF5F2")]),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]))
+                return table
 
-            def _section_header(y_pos, title):
-                y_pos = _new_page_if_needed(y_pos, 120)
-                c.setFillColor(colors.HexColor("#F5DFD2"))
-                c.rect(40, y_pos - 6, page_width - 80, 22, fill=1, stroke=0)
-                c.setFillColor(colors.HexColor("#6A2A05"))
-                c.setFont("Helvetica-Bold", 11)
-                c.drawString(50, y_pos + 4, title)
-                c.setFillColor(colors.black)
-                c.setFont("Helvetica", 10)
-                return y_pos - 26
-
-            def _kv_row(y_pos, label, value, row_bg=False):
-                y_pos = _new_page_if_needed(y_pos)
-                if row_bg:
-                    c.setFillColor(colors.HexColor("#FDF5F2"))
-                    c.rect(40, y_pos - 4, page_width - 80, 16, fill=1, stroke=0)
-                    c.setFillColor(colors.black)
-                c.setFont("Helvetica", 10)
-                c.drawString(55, y_pos, str(label))
-                c.drawRightString(page_width - 50, y_pos, str(value))
-                return y_pos - 18
-
-            # ── Cover header ───────────────────────────────────────────────────
-            c.setFillColor(colors.HexColor("#C84B2F"))
-            c.rect(0, page_height - 90, page_width, 90, fill=1, stroke=0)
-            c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 22)
-            c.drawString(50, page_height - 48, "Self-Healing RAG Platform")
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(50, page_height - 68, "Analytics Report")
-            c.setFont("Helvetica", 10)
-            c.drawString(50, page_height - 84, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
-
-            y = page_height - 110
-
-            # ── Date Range ────────────────────────────────────────────────────
-            y = _section_header(y, "Date Range")
             date_range = report.get("date_range", {})
-            row_bg = False
-            for lbl, val in [
-                ("Range", date_range.get("range", selected_range)),
-                ("Start Date", (date_range.get("start_date") or "N/A")[:10]),
-                ("End Date", (date_range.get("end_date") or "N/A")[:10]),
-            ]:
-                y = _kv_row(y, lbl, val, row_bg)
-                row_bg = not row_bg
-            y -= 10
-
-            # ── Summary ───────────────────────────────────────────────────────
-            y = _section_header(y, "Summary")
-            row_bg = False
-            for lbl, val in [
-                ("Total Queries", report.get("total_queries", 0)),
-                ("Documents Indexed", total_documents),
-                ("Vector Store Size (MB)", vector_store_mb),
-                ("System Status", report.get("status", "healthy").title()),
-            ]:
-                y = _kv_row(y, lbl, val, row_bg)
-                row_bg = not row_bg
-            y -= 10
-
-            # ── Confidence Metrics ────────────────────────────────────────────
-            y = _section_header(y, "Confidence Metrics")
             conf = report.get("confidence_metrics", {})
-            row_bg = False
-            y = _kv_row(y, "Average Confidence", f"{conf.get('average_confidence', 0):.1f}%", row_bg)
-            y -= 10
-
-            # ── Faithfulness Metrics ──────────────────────────────────────────
-            y = _section_header(y, "Faithfulness Metrics")
             faith = report.get("faithfulness_metrics", {})
-            row_bg = False
-            for lbl, key in [
-                ("Average Faithfulness", "average_faithfulness"),
-                ("Average Relevance", "average_relevance"),
-                ("Average Precision", "average_precision"),
-                ("Average Recall", "average_recall"),
-            ]:
-                y = _kv_row(y, lbl, f"{faith.get(key, 0):.1f}%", row_bg)
-                row_bg = not row_bg
-            y -= 10
-
-            # ── Hallucination Rate ────────────────────────────────────────────
-            y = _section_header(y, "Hallucination Rate")
             hall = report.get("hallucination_rate", {})
-            row_bg = False
-            for lbl, val in [
-                ("Hallucination Rate", f"{hall.get('rate', 0):.1f}%"),
-                ("Hallucinated Queries", hall.get("count", 0)),
-                ("Reliable Answers", hall.get("reliable_count", 0)),
-            ]:
-                y = _kv_row(y, lbl, val, row_bg)
-                row_bg = not row_bg
-            y -= 10
-
-            # ── Retry Statistics ──────────────────────────────────────────────
-            y = _section_header(y, "Retry Statistics")
             retry = report.get("retry_statistics", {})
-            row_bg = False
-            for lbl, val in [
-                ("Retry Rate", f"{retry.get('retry_rate', 0):.1f}%"),
-                ("Total Retried Queries", retry.get("retry_count", 0)),
-            ]:
-                y = _kv_row(y, lbl, val, row_bg)
-                row_bg = not row_bg
-            y -= 10
-
-            # ── Charts Summary ────────────────────────────────────────────────
             charts = report.get("charts_summary", {})
             overview = charts.get("overview", [])
-            if overview:
-                y = _section_header(y, "Charts Summary — Overview")
-                row_bg = False
-                for item in overview:
-                    y = _kv_row(y, item.get("name", ""), item.get("value", 0), row_bg)
-                    row_bg = not row_bg
-                y -= 10
-
-            # ── Most Queried Documents ────────────────────────────────────────
             top_docs = report.get("most_queried_documents", [])
+
+            story = [
+                Paragraph("Self-Healing RAG Platform", title_style),
+                Paragraph("Analytics Report", heading_style),
+                Paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", normal_style),
+                Spacer(1, 18),
+                Paragraph("Date Range", heading_style),
+                _table([
+                    ["Metric", "Value"],
+                    ["Range", date_range.get("range", selected_range)],
+                    ["Start Date", (date_range.get("start_date") or "N/A")[:10]],
+                    ["End Date", (date_range.get("end_date") or "N/A")[:10]],
+                ]),
+                Spacer(1, 14),
+                Paragraph("Summary", heading_style),
+                _table([
+                    ["Metric", "Value"],
+                    ["Total Queries", report.get("total_queries", 0)],
+                    ["Documents Indexed", total_documents],
+                    ["Vector Store Size (MB)", vector_store_mb],
+                    ["System Status", report.get("status", "healthy").title()],
+                ]),
+                Spacer(1, 14),
+                Paragraph("Quality Metrics", heading_style),
+                _table([
+                    ["Metric", "Value"],
+                    ["Average Confidence", _pct(conf.get("average_confidence"))],
+                    ["Average Faithfulness", _pct(faith.get("average_faithfulness"))],
+                    ["Average Relevance", _pct(faith.get("average_relevance"))],
+                    ["Average Precision", _pct(faith.get("average_precision"))],
+                    ["Average Recall", _pct(faith.get("average_recall"))],
+                ]),
+                Spacer(1, 14),
+                Paragraph("Hallucination Rate", heading_style),
+                _table([
+                    ["Metric", "Value"],
+                    ["Hallucination Rate", _pct(hall.get("rate"))],
+                    ["Hallucinated Queries", hall.get("count", 0)],
+                    ["Reliable Answers", hall.get("reliable_count", 0)],
+                ]),
+                Spacer(1, 14),
+                Paragraph("Retry Statistics", heading_style),
+                _table([
+                    ["Metric", "Value"],
+                    ["Retry Rate", _pct(retry.get("retry_rate"))],
+                    ["Total Retried Queries", retry.get("retry_count", 0)],
+                ]),
+                Spacer(1, 14),
+            ]
+
+            if overview:
+                story.extend([
+                    Paragraph("Charts Summary - Overview", heading_style),
+                    _table([["Metric", "Value"]] + [[item.get("name", ""), item.get("value", 0)] for item in overview]),
+                    Spacer(1, 14),
+                ])
+
             if top_docs:
-                y = _section_header(y, "Most Queried Documents")
-                row_bg = False
-                for item in top_docs[:10]:
-                    y = _kv_row(y, item.get("document", ""), f"{item.get('queries', 0)} queries", row_bg)
-                    row_bg = not row_bg
-                y -= 10
+                story.extend([
+                    Paragraph("Most Queried Documents", heading_style),
+                    _table([["Document", "Queries"]] + [[item.get("document", ""), item.get("queries", 0)] for item in top_docs[:10]]),
+                    Spacer(1, 14),
+                ])
 
-            # ── Footer ────────────────────────────────────────────────────────
-            c.setFillColor(colors.HexColor("#6A4034"))
-            c.setFont("Helvetica", 8)
-            c.drawCentredString(page_width / 2, 30, "Self-Healing RAG Platform  |  Confidential Analytics Report")
-
-            c.save()
+            story.append(Paragraph("Self-Healing RAG Platform | Confidential Analytics Report", normal_style))
+            doc.build(story)
+            pdf_buffer.seek(0)
         except Exception as exc:
             logger.error("[Export] PDF generation failed: %s", exc, exc_info=True)
-            if 'tmp_path' in locals() and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
             raise HTTPException(status_code=500, detail=f"PDF generation failed: {exc}")
 
-        logger.info("[Export] PDF export successful for user %s. Returning FileResponse.", current_user.uid)
-        
-        def delete_temp_file(path: str):
-            try:
-                os.remove(path)
-                logger.info("[Export] Deleted temporary PDF file: %s", path)
-            except Exception as e:
-                logger.warning("[Export] Failed to delete temporary file %s: %s", path, e)
-
-        if background_tasks:
-            background_tasks.add_task(delete_temp_file, tmp_path)
-
-        return FileResponse(
-            path=tmp_path,
+        logger.info("[Export] PDF export successful for user %s (%d bytes)", current_user.uid, pdf_buffer.getbuffer().nbytes)
+        return StreamingResponse(
+            pdf_buffer,
             media_type="application/pdf",
-            filename="analytics_report.pdf",
-            background=background_tasks
+            headers={
+                "Content-Disposition": "attachment; filename=analytics_report.pdf"
+            },
         )
-
     # Unreachable — guard already checked above
     raise HTTPException(status_code=400, detail="Invalid format. Supported: json, pdf")
 
