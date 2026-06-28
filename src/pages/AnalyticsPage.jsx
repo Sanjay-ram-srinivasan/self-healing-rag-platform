@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  Download,
   FileText,
   Loader2,
   Shield,
@@ -25,8 +24,7 @@ import {
   YAxis,
 } from "recharts";
 import Footer from "../components/Footer.jsx";
-import { exportAnalytics, fetchAnalytics, streamLogsUrl } from "../services/api.js";
-
+import { fetchAnalytics, streamLogsUrl } from "../services/api.js";
 
 const pct = (value) => `${Number(value || 0).toFixed(1)}%`;
 
@@ -36,9 +34,6 @@ export default function AnalyticsPage({ documentsCount }) {
   const [error, setError] = useState("");
   const [dateRange, setDateRange] = useState("7d");
   const [customRange, setCustomRange] = useState({ start: "", end: "" });
-  const [exportOpen, setExportOpen] = useState(false);
-  const [exportStatus, setExportStatus] = useState(null); // { type: 'success'|'error', message: string }
-  const [exporting, setExporting] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
   const [retryOpen, setRetryOpen] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -50,7 +45,7 @@ export default function AnalyticsPage({ documentsCount }) {
       setError("");
       setAnalytics(null);
       try {
-        let range = dateRange;
+        const range = dateRange;
         let start = null;
         let end = null;
         if (dateRange === "custom") {
@@ -107,18 +102,24 @@ export default function AnalyticsPage({ documentsCount }) {
   const indexedDocuments = Number(metrics.documents_indexed ?? documentsCount ?? 0);
   const history = metrics.history ?? [];
 
-  const overviewChart = useMemo(() => ([
-    { name: "Total Queries", value: totalQueries },
-    { name: "Retried Queries", value: retryCount },
-    { name: "Reliable Answers", value: reliableCount },
-    { name: "Hallucinations", value: hallucinationCount },
-  ]), [totalQueries, retryCount, reliableCount, hallucinationCount]);
+  const overviewChart = useMemo(
+    () => ([
+      { name: "Total Queries", value: totalQueries },
+      { name: "Retried Queries", value: retryCount },
+      { name: "Reliable Answers", value: reliableCount },
+      { name: "Hallucinations", value: hallucinationCount },
+    ]),
+    [totalQueries, retryCount, reliableCount, hallucinationCount],
+  );
 
-  const qualityCards = useMemo(() => ([
-    { label: "Answer Relevance", value: avgRelevance, tone: "text-accent", dataKey: "average_relevance" },
-    { label: "Context Precision", value: avgPrecision, tone: "text-[#6A2A05]", dataKey: "average_precision" },
-    { label: "Context Recall", value: avgRecall, tone: "text-[#8C5A46]", dataKey: "average_recall" },
-  ]), [avgRelevance, avgPrecision, avgRecall]);
+  const qualityCards = useMemo(
+    () => ([
+      { label: "Answer Relevance", value: avgRelevance, tone: "text-accent", dataKey: "average_relevance" },
+      { label: "Context Precision", value: avgPrecision, tone: "text-[#6A2A05]", dataKey: "average_precision" },
+      { label: "Context Recall", value: avgRecall, tone: "text-[#8C5A46]", dataKey: "average_recall" },
+    ]),
+    [avgRelevance, avgPrecision, avgRecall],
+  );
 
   const pieData = [
     { name: "Reliable", value: reliableCount },
@@ -142,80 +143,40 @@ export default function AnalyticsPage({ documentsCount }) {
             </div>
             <div className="flex flex-wrap gap-3">
               <div className="flex rounded-md border border-line bg-paper p-1">
-                {["7d", "30d", "Custom"].map((range) => (
-                  <button
-                    key={range}
-                    type="button"
-                    onClick={() => setDateRange(range.toLowerCase())}
-                    className={`rounded px-3 py-2 text-xs font-black ${dateRange === range.toLowerCase() ? "bg-accent text-white" : "text-[#6A4034]"}`}
-                  >
-                    {range}
-                  </button>
-                ))}
+                {["7d", "30d", "Custom"].map((range) => {
+                  const value = range === "Custom" ? "custom" : range;
+                  return (
+                    <button
+                      key={range}
+                      type="button"
+                      onClick={() => setDateRange(value)}
+                      className={`rounded px-3 py-2 text-xs font-black ${dateRange === value ? "bg-accent text-white" : "text-[#6A4034]"}`}
+                    >
+                      {range}
+                    </button>
+                  );
+                })}
               </div>
               {dateRange === "custom" && (
                 <div className="flex items-center gap-2 rounded-md border border-line bg-paper px-3 py-2">
-                  <input type="date" className="bg-transparent text-xs font-bold" value={customRange.start} onChange={(e) => setCustomRange((p) => ({ ...p, start: e.target.value }))} />
+                  <input
+                    type="date"
+                    className="bg-transparent text-xs font-bold"
+                    value={customRange.start}
+                    onChange={(e) => setCustomRange((p) => ({ ...p, start: e.target.value }))}
+                  />
                   <span className="text-muted">-</span>
-                  <input type="date" className="bg-transparent text-xs font-bold" value={customRange.end} onChange={(e) => setCustomRange((p) => ({ ...p, end: e.target.value }))} />
+                  <input
+                    type="date"
+                    className="bg-transparent text-xs font-bold"
+                    value={customRange.end}
+                    onChange={(e) => setCustomRange((p) => ({ ...p, end: e.target.value }))}
+                  />
                 </div>
               )}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setExportOpen(!exportOpen)}
-                  disabled={exporting}
-                  className="flex items-center gap-2 rounded-md bg-paper px-5 py-3 text-sm font-bold text-ink disabled:opacity-60"
-                >
-                  {exporting
-                    ? <Loader2 className="animate-spin" size={15} />
-                    : <Download size={15} />}
-                  {exporting ? "Exporting…" : "Export Report"}
-                </button>
-                {exportOpen && (
-                  <div className="absolute right-0 top-12 z-20 w-40 rounded-md border border-line bg-[#FFFEFC] p-1 text-sm shadow-soft">
-                    {["JSON", "PDF"].map((format) => (
-                      <button
-                        key={format}
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded px-3 py-2 text-left font-semibold hover:bg-paper"
-                        onClick={async () => {
-                          setExportOpen(false);
-                          setExporting(true);
-                          setExportStatus(null);
-                          try {
-                            const blob = await exportAnalytics(
-                              format.toLowerCase(),
-                              dateRange,
-                              customRange.start,
-                              customRange.end,
-                            );
-                            const url = window.URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                             a.download = format.toLowerCase() === "pdf" ? "analytics_report.pdf" : `analytics_report.${format.toLowerCase()}`;
-                            document.body.appendChild(a);
-                            a.click();
-                            a.remove();
-                            window.URL.revokeObjectURL(url);
-                            setExportStatus({ type: "success", message: `${format} report downloaded successfully.` });
-                            setTimeout(() => setExportStatus(null), 4000);
-                          } catch (e) {
-                            console.error("[Export] Failed:", e);
-                            setExportStatus({ type: "error", message: e?.message || "Export failed. Please try again." });
-                          } finally {
-                            setExporting(false);
-                          }
-                        }}
-                      >
-                        <FileText size={13} />
-                        {format}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button type="button" onClick={() => setLiveOpen(true)} className="rounded-md bg-accent px-5 py-3 text-sm font-black text-white">Live Feed</button>
+              <button type="button" onClick={() => setLiveOpen(true)} className="rounded-md bg-accent px-5 py-3 text-sm font-black text-white">
+                Live Feed
+              </button>
             </div>
           </div>
 
@@ -226,29 +187,6 @@ export default function AnalyticsPage({ documentsCount }) {
             </div>
           )}
           {error && <p className="mt-8 rounded-lg bg-red-50 p-4 text-sm text-red-700">{error}</p>}
-
-          {exportStatus && (
-            <div
-              className={`mt-6 flex items-start gap-3 rounded-lg border p-4 text-sm font-semibold ${
-                exportStatus.type === "success"
-                  ? "border-green-200 bg-green-50 text-green-800"
-                  : "border-red-200 bg-red-50 text-red-800"
-              }`}
-            >
-              <span className="mt-0.5 shrink-0 text-lg leading-none">
-                {exportStatus.type === "success" ? "✓" : "✕"}
-              </span>
-              <span className="flex-1">{exportStatus.message}</span>
-              <button
-                type="button"
-                onClick={() => setExportStatus(null)}
-                className="ml-2 shrink-0 opacity-60 hover:opacity-100"
-                aria-label="Dismiss"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
 
           <div className="mt-9 grid gap-6 lg:grid-cols-3">
             <MetricCard icon={Activity} label="Total Queries" value={totalQueries.toLocaleString()} note="Logged from real question history" history={history} dataKey="questions" />
