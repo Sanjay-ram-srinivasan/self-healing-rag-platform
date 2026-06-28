@@ -1,6 +1,11 @@
 import axios from "axios";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const RAILWAY_BACKEND_URL = "https://self-healing-rag-platform-production.up.railway.app";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+  || import.meta.env.VITE_API_URL
+  || (typeof window !== "undefined" && window.location.hostname !== "self-healing-rag-platform-production.up.railway.app"
+      ? RAILWAY_BACKEND_URL
+      : "");
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -162,7 +167,7 @@ export const fetchAnalytics = async (range, startDate, endDate) => {
   return data;
 };
 
-export const streamLogsUrl = `/api/logs/stream`;
+export const streamLogsUrl = () => `${API_BASE_URL}/api/logs/stream`;
 
 // Settings
 export const fetchSettings = async () => {

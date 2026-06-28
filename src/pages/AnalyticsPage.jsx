@@ -72,7 +72,7 @@ export default function AnalyticsPage({ documentsCount }) {
 
   useEffect(() => {
     if (!liveOpen) return undefined;
-    const source = new EventSource(streamLogsUrl);
+    const source = new EventSource(streamLogsUrl());
     source.onmessage = (event) => {
       try {
         const nextLog = JSON.parse(event.data);
