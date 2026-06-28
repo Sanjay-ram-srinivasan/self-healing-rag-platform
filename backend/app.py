@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from backend.analytics import (
     append_query_log,
     filter_queries_by_timestamp,
-    load_stats,
+    load_user_stats,
     log_analytics_summary,
     resolve_analytics_period,
     summarize_analytics,
@@ -470,11 +470,8 @@ def analytics(
     )
     vector_store_mb = round(total_size_bytes / (1024 * 1024), 2)
 
-    stats = load_stats()
-    all_queries = [
-        q for q in stats.get("queries", [])
-        if q.get("user", {}).get("uid") == current_user.uid
-    ]
+    stats = load_user_stats(current_user.uid)
+    all_queries = stats.get("queries", [])
     logger.info("Analytics range selected: %s", selected_range)
     logger.info("Analytics records before filtering: %s", len(all_queries))
     filtered_queries = filter_queries_by_timestamp(all_queries, start_dt, end_dt)
@@ -547,7 +544,7 @@ def ask_question(payload: Query, current_user: AuthenticatedUser = Depends(verif
         "reason": result.get("reason", ""),
         "attempts": result.get("attempts", 1),
         "sources": result.get("sources", []),
-    })
+    }, user_id=current_user.uid)
 
     if payload.chat_id:
         analytics_metadata = {

@@ -5,11 +5,15 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta
 from statistics import mean
 
+from backend.persistence import get_firestore_client
+from backend.storage import load_json, save_json
+
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATS_FILE = os.path.join(BASE_DIR, "data", "rag_stats.json")
+ANALYTICS_COLLECTION = "analytics"
 
 
 def _default_stats():
@@ -18,23 +22,40 @@ def _default_stats():
     }
 
 
+def _local_stats():
+    return load_json(STATS_FILE, _default_stats())
+
+
+def _remote_doc_ref(user_id):
+    client = get_firestore_client()
+    if not client:
+        return None
+    return client.collection(ANALYTICS_COLLECTION).document(user_id)
+
+
+def _utc_now():
+    return datetime.utcnow().isoformat()
+
+
 def load_stats():
-    os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
-    if not os.path.exists(STATS_FILE):
-        return _default_stats()
-
-    try:
-        with open(STATS_FILE, "r", encoding="utf-8") as file:
-            stats = json.load(file)
-    except Exception:
-        logger.warning("Could not load rag stats file", exc_info=True)
-        return _default_stats()
-
-    if isinstance(stats, dict) and isinstance(stats.get("queries"), list):
+    stats = _local_stats()
+    client = get_firestore_client()
+    if not client:
         return stats
 
-    # Migrate the previous aggregate-only shape into the new query-log format.
-    return _default_stats()
+    try:
+        # Merge all user analytics into a single list (for backward compat)
+        all_queries = []
+        for doc in client.collection(ANALYTICS_COLLECTION).stream():
+            user_data = doc.to_dict()
+            all_queries.extend(user_data.get("queries", []))
+        if all_queries:
+            stats["queries"] = all_queries
+            save_json(STATS_FILE, stats)
+    except Exception:
+        logger.warning("Could not sync analytics from Firestore", exc_info=True)
+
+    return stats
 
 
 def save_stats(stats):
@@ -43,13 +64,56 @@ def save_stats(stats):
         json.dump(stats, file, indent=2)
 
 
-def append_query_log(entry):
+def append_query_log(entry, user_id=None):
     stats = load_stats()
     next_entry = dict(entry)
     next_entry.setdefault("timestamp", datetime.now().isoformat())
+    if user_id:
+        next_entry["user_id"] = user_id
     stats.setdefault("queries", []).append(next_entry)
     save_stats(stats)
+
+    # Persist to Firestore per user
+    if user_id:
+        doc_ref = _remote_doc_ref(user_id)
+        if doc_ref:
+            try:
+                snapshot = doc_ref.get()
+                if snapshot.exists:
+                    existing_queries = snapshot.to_dict().get("queries", [])
+                else:
+                    existing_queries = []
+                existing_queries.append(next_entry)
+                doc_ref.set({
+                    "user_id": user_id,
+                    "queries": existing_queries,
+                    "updated_at": _utc_now(),
+                })
+            except Exception:
+                logger.warning("Could not persist analytics to Firestore for user %s", user_id, exc_info=True)
+
     return stats
+
+
+def load_user_stats(user_id):
+    """Load analytics stats for a specific user, falling back to local file."""
+    client = get_firestore_client()
+    if client and user_id:
+        try:
+            doc_ref = client.collection(ANALYTICS_COLLECTION).document(user_id)
+            snapshot = doc_ref.get()
+            if snapshot.exists:
+                queries = snapshot.to_dict().get("queries", [])
+                return {"queries": queries}
+        except Exception:
+            logger.warning("Could not load analytics from Firestore for user %s", user_id, exc_info=True)
+
+    # Fallback: filter local stats by user_id
+    stats = _local_stats()
+    queries = stats.get("queries", [])
+    if user_id:
+        queries = [q for q in queries if q.get("user_id") == user_id or q.get("user", {}).get("uid") == user_id]
+    return {"queries": queries}
 
 
 def parse_query_timestamp(timestamp_value):
