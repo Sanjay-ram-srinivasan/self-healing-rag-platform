@@ -1,15 +1,19 @@
 import axios from "axios";
 
 const RAILWAY_BACKEND_URL = "https://self-healing-rag-platform-production.up.railway.app";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
   || import.meta.env.VITE_API_URL
   || (typeof window !== "undefined" && window.location.hostname !== "self-healing-rag-platform-production.up.railway.app"
       ? RAILWAY_BACKEND_URL
       : "");
 
+const DEFAULT_TIMEOUT_MS = 90000;
+const LONG_RUNNING_TIMEOUT_MS = 180000;
+const MAX_TIMEOUT_RETRIES = 2;
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: DEFAULT_TIMEOUT_MS,
   headers: {
     "Content-Type": "application/json",
   },
@@ -50,6 +54,14 @@ apiClient.interceptors.response.use(
       }
     }
 
+    const isTimeout = error.code === "ECONNABORTED" || /timeout/i.test(error.message || "");
+    const retryCount = originalRequest._timeoutRetryCount || 0;
+    if (isTimeout && retryCount < MAX_TIMEOUT_RETRIES) {
+      originalRequest._timeoutRetryCount = retryCount + 1;
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (retryCount + 1)));
+      return apiClient(originalRequest);
+    }
+
     // Normalize error message for UI consumption
     if (error.response?.data?.detail) {
       error.message = error.response.data.detail;
@@ -57,6 +69,8 @@ apiClient.interceptors.response.use(
       error.message = "Authentication required. Please sign in again.";
     } else if (error.response?.status === 403) {
       error.message = "You do not have permission to access this resource.";
+    } else if (isTimeout) {
+      error.message = "The backend is taking longer than expected to respond. This often happens after a cold start — please try again.";
     } else if (error.code === "ERR_NETWORK") {
       error.message = "Network error. Please verify that the backend is running and CORS is allowed.";
     }
@@ -76,9 +90,19 @@ export function getApiAuthToken() {
   return _authToken;
 }
 
+/** Wake a sleeping Railway backend before authenticated requests. */
+export async function warmUpBackend() {
+  if (!API_BASE_URL) return;
+  try {
+    await axios.get(`${API_BASE_URL}/api/health`, { timeout: LONG_RUNNING_TIMEOUT_MS });
+  } catch {
+    // Any response (even 404) means the container is awake.
+  }
+}
+
 // Documents
 export const fetchDocuments = async () => {
-  const { data } = await apiClient.get("/api/documents");
+  const { data } = await apiClient.get("/api/documents", { timeout: LONG_RUNNING_TIMEOUT_MS });
   return data;
 };
 
@@ -91,6 +115,7 @@ export const uploadDocument = async (file, collectionId = null, onProgress) => {
   const { data } = await apiClient.post("/api/documents/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: onProgress,
+    timeout: LONG_RUNNING_TIMEOUT_MS,
   });
   return data;
 };
@@ -101,7 +126,9 @@ export const deleteDocument = async (filename) => {
 };
 
 export const reindexDocument = async (filename) => {
-  const { data } = await apiClient.post(`/api/documents/${encodeURIComponent(filename)}/reindex`);
+  const { data } = await apiClient.post(`/api/documents/${encodeURIComponent(filename)}/reindex`, null, {
+    timeout: LONG_RUNNING_TIMEOUT_MS,
+  });
   return data;
 };
 
@@ -154,7 +181,7 @@ export const updateChat = async (chatId, payload) => {
 
 // Ask
 export const askQuestion = async (payload) => {
-  const { data } = await apiClient.post("/api/chat", payload);
+  const { data } = await apiClient.post("/api/chat", payload, { timeout: LONG_RUNNING_TIMEOUT_MS });
   return data;
 };
 

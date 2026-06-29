@@ -177,7 +177,21 @@ export default function DocumentsPage({ documents, loading, error, onRefresh }) 
             </div>
           </div>
 
-          {(actionError || error) && <p className="mt-5 rounded-md bg-red-50 p-3 text-sm text-red-700">{actionError || error}</p>}
+          {(actionError || error) && (
+            <div className="mt-5 flex flex-wrap items-center gap-3 rounded-md bg-red-50 p-3 text-sm text-red-700">
+              <span>{actionError || error}</span>
+              {error && onRefresh && (
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  className="rounded-md bg-white px-3 py-1 text-xs font-black text-red-700 shadow-soft hover:bg-red-100 disabled:opacity-60"
+                >
+                  {loading ? "Retrying..." : "Retry"}
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="mt-9 grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
             <aside className="space-y-5">

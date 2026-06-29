@@ -6,7 +6,7 @@ import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
-import { fetchDocuments, setApiAuthToken } from "./services/api.js";
+import { fetchDocuments, setApiAuthToken, warmUpBackend } from "./services/api.js";
 
 const navItems = [
   { id: "chat", label: "Chat", icon: MessageSquare },
@@ -42,14 +42,38 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isAuthenticated) {
-      loadDocuments();
+    if (!isAuthenticated) {
+      setDocuments([]);
+      setDocumentsError("");
+      setDocumentsLoading(false);
       return;
     }
 
-    setDocuments([]);
-    setDocumentsError("");
-    setDocumentsLoading(false);
+    let cancelled = false;
+
+    const bootstrapDocuments = async () => {
+      setDocumentsLoading(true);
+      setDocumentsError("");
+      try {
+        await warmUpBackend();
+        if (cancelled) return;
+        const data = await fetchDocuments();
+        if (cancelled) return;
+        setDocuments(data.documents || []);
+      } catch (error) {
+        if (cancelled) return;
+        setDocumentsError(error.response?.data?.detail || error.message || "Unable to load documents.");
+      } finally {
+        if (!cancelled) {
+          setDocumentsLoading(false);
+        }
+      }
+    };
+
+    bootstrapDocuments();
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated]);
 
   const page = useMemo(() => {

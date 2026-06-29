@@ -313,12 +313,16 @@ async def upload_document(
 
 @app.get("/api/documents")
 @app.get("/documents")
-def get_documents(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
+async def get_documents(current_user: AuthenticatedUser = Depends(verify_firebase_token)):
     """
     List documents for the current user.
     Uses Firestore as the source of truth; falls back to scanning the local
     uploads directory if Firestore is unavailable.
     """
+    return await asyncio.to_thread(_build_documents_response, current_user.uid)
+
+
+def _build_documents_response(user_id: str):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
     # Primary source: Firestore per-document metadata
@@ -345,7 +349,7 @@ def get_documents(current_user: AuthenticatedUser = Depends(verify_firebase_toke
         # Filter to this user's documents only.
         # uid=None is a fallback-mode stub — show it to whoever is logged in.
         owner = file_meta.get("user_id")
-        if owner is not None and owner != current_user.uid:
+        if owner is not None and owner != user_id:
             continue
 
         # Get size from disk if available, otherwise use stored metadata

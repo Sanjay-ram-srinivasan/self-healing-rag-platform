@@ -23,6 +23,7 @@ On startup the app calls sync_from_storage() which:
 import logging
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from backend.persistence import get_firestore_client, get_storage_bucket
 
@@ -33,6 +34,17 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
 
 _STORAGE_PREFIX = "uploads/"
 _FS_COLLECTION   = "document_files"
+_FIRESTORE_LIST_TIMEOUT_SECONDS = 20
+
+
+def _stream_document_meta(client) -> dict[str, dict]:
+    docs = client.collection(_FS_COLLECTION).stream()
+    result = {}
+    for doc in docs:
+        data = doc.to_dict()
+        fname = data.get("filename") or doc.id
+        result[fname] = data
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,14 +168,14 @@ def list_all_document_meta() -> dict[str, dict]:
         logger.warning("[Firestore] Unavailable; cannot list document metadata.")
         return {}
     try:
-        docs = client.collection(_FS_COLLECTION).stream()
-        result = {}
-        for doc in docs:
-            data = doc.to_dict()
-            fname = data.get("filename") or doc.id
-            result[fname] = data
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_stream_document_meta, client)
+            result = future.result(timeout=_FIRESTORE_LIST_TIMEOUT_SECONDS)
         logger.info("[Firestore] Listed %d document metadata records.", len(result))
         return result
+    except FuturesTimeoutError:
+        logger.error("[Firestore] Timed out listing document metadata after %ss.", _FIRESTORE_LIST_TIMEOUT_SECONDS)
+        return {}
     except Exception:
         logger.error("[Firestore] Failed to list document metadata.", exc_info=True)
         return {}
