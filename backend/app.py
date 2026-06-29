@@ -96,75 +96,75 @@ async def log_request_timing(request: Request, call_next):
         )
 
 
-@app.on_event("startup")
-def hydrate_persistent_storage():
+async def run_hydration_in_background():
     """
-    Startup hook - runs once when the FastAPI process starts.
-
-    1. Downloads any uploaded files from Firebase Storage that are not already
-       present on the local ephemeral disk.
-    2. If the Chroma vector store is empty (fresh Railway container), rebuilds
-       it by re-indexing every restored document.
-    3. Syncs chat history from Firestore.
+    Runs startup hydration tasks in a background thread to prevent blocking
+    FastAPI startup, ensuring immediate port binding and API responsiveness.
     """
     startup_start = time.perf_counter()
-    logger.info("[Startup] Beginning application startup...")
+    logger.info("[Background Startup] Beginning application startup hydration...")
 
     firebase_start = time.perf_counter()
     try:
-        get_firestore_client()
-        logger.info("[Startup] Firebase client prewarmed in %.2fs", time.perf_counter() - firebase_start)
+        await asyncio.to_thread(get_firestore_client)
+        logger.info("[Background Startup] Firebase client prewarmed in %.2fs", time.perf_counter() - firebase_start)
     except Exception:
-        logger.error("[Startup] Firebase client prewarm failed.", exc_info=True)
+        logger.error("[Background Startup] Firebase client prewarm failed.", exc_info=True)
 
     vector_start = time.perf_counter()
     try:
-        initialize_vectorstore()
-        logger.info("[Startup] Vector store prewarmed in %.2fs", time.perf_counter() - vector_start)
+        await asyncio.to_thread(initialize_vectorstore)
+        logger.info("[Background Startup] Vector store prewarmed in %.2fs", time.perf_counter() - vector_start)
     except Exception:
-        logger.error("[Startup] Vector store prewarm failed.", exc_info=True)
+        logger.error("[Background Startup] Vector store prewarm failed.", exc_info=True)
 
     restore_start = time.perf_counter()
-    logger.info("[Startup] Syncing documents from Firebase Storage...")
+    logger.info("[Background Startup] Syncing documents from Firebase Storage...")
     try:
-        restored_docs = sync_from_storage()  # list[(filename, meta)]
-        logger.info("[Startup] %d documents available locally after sync.", len(restored_docs))
+        restored_docs = await asyncio.to_thread(sync_from_storage)
+        logger.info("[Background Startup] %d documents available locally after sync.", len(restored_docs))
     except Exception:
-        logger.error("[Startup] sync_from_storage() failed.", exc_info=True)
+        logger.error("[Background Startup] sync_from_storage() failed.", exc_info=True)
         restored_docs = []
-    logger.info("[Startup] Storage sync completed in %.2fs", time.perf_counter() - restore_start)
+    logger.info("[Background Startup] Storage sync completed in %.2fs", time.perf_counter() - restore_start)
 
     try:
-        vectorstore = initialize_vectorstore()
-        existing_docs = vectorstore.get().get("documents", [])
+        vectorstore = await asyncio.to_thread(initialize_vectorstore)
+        existing_docs = await asyncio.to_thread(lambda: vectorstore.get().get("documents", []))
         if not existing_docs:
-            logger.info("[Startup] Vector store is empty - rebuilding from %d documents.", len(restored_docs))
+            logger.info("[Background Startup] Vector store is empty - rebuilding from %d documents.", len(restored_docs))
             indexed = 0
             for filename, file_meta in restored_docs:
                 file_path = os.path.join(UPLOAD_DIR, filename)
                 if not os.path.isfile(file_path):
-                    logger.warning("[Startup] Skipping %s - file not on disk.", filename)
+                    logger.warning("[Background Startup] Skipping %s - file not on disk.", filename)
                     continue
                 try:
-                    _index_document_file(file_path, filename, file_meta)
+                    await asyncio.to_thread(_index_document_file, file_path, filename, file_meta)
                     indexed += 1
-                    logger.info("[Startup] Indexed %s into vector store.", filename)
+                    logger.info("[Background Startup] Indexed %s into vector store.", filename)
                 except Exception:
-                    logger.error("[Startup] Failed to index %s.", filename, exc_info=True)
-            logger.info("[Startup] Vector store rebuild complete - %d/%d documents indexed.", indexed, len(restored_docs))
+                    logger.error("[Background Startup] Failed to index %s.", filename, exc_info=True)
+            logger.info("[Background Startup] Vector store rebuild complete - %d/%d documents indexed.", indexed, len(restored_docs))
         else:
-            logger.info("[Startup] Vector store already populated (%d chunks).", len(existing_docs))
+            logger.info("[Background Startup] Vector store already populated (%d chunks).", len(existing_docs))
     except Exception:
-        logger.error("[Startup] Vector store check/rebuild failed.", exc_info=True)
+        logger.error("[Background Startup] Vector store check/rebuild failed.", exc_info=True)
 
     chat_sync_start = time.perf_counter()
     try:
         from backend.chat_history_store import sync_chats_from_firestore
-        sync_chats_from_firestore()
+        await asyncio.to_thread(sync_chats_from_firestore)
     except Exception:
-        logger.warning("[Startup] Chat history sync failed.", exc_info=True)
-    logger.info("[Startup] Chat sync phase completed in %.2fs", time.perf_counter() - chat_sync_start)
-    logger.info("[Startup] Application startup completed in %.2fs", time.perf_counter() - startup_start)
+        logger.warning("[Background Startup] Chat history sync failed.", exc_info=True)
+    logger.info("[Background Startup] Chat sync phase completed in %.2fs", time.perf_counter() - chat_sync_start)
+    logger.info("[Background Startup] Application startup hydration completed in %.2fs", time.perf_counter() - startup_start)
+
+
+@app.on_event("startup")
+async def start_background_hydration():
+    logger.info("[Startup] Spawning background hydration task.")
+    asyncio.create_task(run_hydration_in_background())
 class Query(BaseModel):
     question: str
     collection_id: str | None = None

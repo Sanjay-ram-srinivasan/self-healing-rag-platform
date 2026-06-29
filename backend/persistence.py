@@ -74,9 +74,22 @@ def get_firebase_app():
 
 def get_firestore_client():
     global _firestore_client
+    if _firestore_client is not None:
+        return _firestore_client
+
+    # Disable Firestore if no credentials or GCP environment are present to prevent hanging on metadata server
+    has_credentials = (
+        os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") or
+        os.getenv("FIREBASE_SERVICE_ACCOUNT") or
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or
+        os.getenv("GAE_INSTANCE") or
+        os.getenv("K_SERVICE")
+    )
+    if not has_credentials:
+        logger.warning("[Firebase] No service account credentials or GCP environment detected. Disabling Firestore to prevent hanging.")
+        return None
+
     try:
-        if _firestore_client is not None:
-            return _firestore_client
         start = time.perf_counter()
         app = get_firebase_app()
         _firestore_client = firestore.client(app=app)
@@ -89,9 +102,22 @@ def get_firestore_client():
 
 def get_storage_bucket():
     global _storage_bucket
+    if _storage_bucket is not None:
+        return _storage_bucket
+
+    # Disable Storage if no credentials or GCP environment are present to prevent hanging on metadata server
+    has_credentials = (
+        os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") or
+        os.getenv("FIREBASE_SERVICE_ACCOUNT") or
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or
+        os.getenv("GAE_INSTANCE") or
+        os.getenv("K_SERVICE")
+    )
+    if not has_credentials:
+        logger.warning("[Firebase] No service account credentials or GCP environment detected. Disabling Firebase Storage to prevent hanging.")
+        return None
+
     try:
-        if _storage_bucket is not None:
-            return _storage_bucket
         start = time.perf_counter()
         app = get_firebase_app()
         _storage_bucket = storage.bucket(app=app)

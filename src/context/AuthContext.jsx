@@ -12,6 +12,12 @@ export function AuthProvider({ children }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!firebaseAuth) {
+      setLoading(false);
+      setError("Firebase Authentication is not configured. Please set VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_AUTH_DOMAIN in your Vercel deployment variables.");
+      return undefined;
+    }
+
     const unsubscribe = onIdTokenChanged(firebaseAuth, async (nextUser) => {
       if (!nextUser) {
         setUser(null);
@@ -54,6 +60,10 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(user && token),
 
       async loginWithGoogle() {
+        if (!firebaseAuth || !googleProvider) {
+          setError("Google Sign-In is unavailable because Firebase is not configured.");
+          return;
+        }
         setError("");
         setLoading(true);
 
@@ -66,6 +76,12 @@ export function AuthProvider({ children }) {
       },
 
       async logout() {
+        if (!firebaseAuth) {
+          setUser(null);
+          setToken("");
+          setApiAuthToken("");
+          return;
+        }
         setLoading(true);
 
         try {

@@ -10,7 +10,26 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+let app = null;
+let firebaseAuth = null;
+let googleProvider = null;
 
-export const firebaseAuth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
+const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey &&
+  firebaseConfig.projectId &&
+  firebaseConfig.authDomain
+);
+
+if (isFirebaseConfigured) {
+  try {
+    app = initializeApp(firebaseConfig);
+    firebaseAuth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
+  } catch (error) {
+    console.error("Firebase initialization failed:", error);
+  }
+} else {
+  console.warn("Firebase configuration is incomplete or missing. Check your environment variables.");
+}
+
+export { app, firebaseAuth, googleProvider, isFirebaseConfigured };
