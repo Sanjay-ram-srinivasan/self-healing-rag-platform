@@ -76,7 +76,7 @@ export default function App() {
         onDocumentUpload={loadDocuments}
       />
     );
-  }, [activePage, currentChatId, setCurrentChatId]);
+  }, [activePage, currentChatId, setCurrentChatId, loadDocuments, documents.length]);
 
   if (authLoading && !isAuthenticated) {
     return (
