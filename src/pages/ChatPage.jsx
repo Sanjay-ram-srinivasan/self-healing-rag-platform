@@ -25,6 +25,22 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { askQuestion, fetchChats, searchChats, createChat, fetchChat, deleteChat, updateChat, fetchCollections, uploadDocument, fetchDocuments } from "../services/api.js";
 import StatusPill from "../components/StatusPill.jsx";
 
+function formatChatTimestamp(timestamp) {
+  if (!timestamp) return "No activity yet";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "No activity yet";
+  const dateText = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+  const timeText = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  return `${dateText} - ${timeText}`;
+}
+
 export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUpload }) {
   const chatInputRef = useRef(null);
   const [question, setQuestion] = useState("");
@@ -83,22 +99,6 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
       { label: "Critic Agent", detail: attempts > 1 ? "Context repaired after retry" : "No repair needed", state: "done" },
     ];
   }, [loading, lastResponse]);
-
-  const formatChatTimestamp = (timestamp) => {
-    if (!timestamp) return "No activity yet";
-    const date = new Date(timestamp);
-    if (Number.isNaN(date.getTime())) return "No activity yet";
-    const dateText = new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    }).format(date);
-    const timeText = new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(date);
-    return `${dateText} - ${timeText}`;
-  };
 
   useEffect(() => {
     const handleShortcut = (event) => {
