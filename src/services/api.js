@@ -9,6 +9,9 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
 const DEFAULT_TIMEOUT_MS = 90000;
 const LONG_RUNNING_TIMEOUT_MS = 180000;
+const UPLOAD_TIMEOUT_MS = 600000;
+const INDEX_POLL_INTERVAL_MS = 3000;
+const INDEX_MAX_WAIT_MS = 20 * 60 * 1000;
 const MAX_TIMEOUT_RETRIES = 2;
 
 const apiClient = axios.create({
@@ -56,7 +59,7 @@ apiClient.interceptors.response.use(
 
     const isTimeout = error.code === "ECONNABORTED" || /timeout/i.test(error.message || "");
     const retryCount = originalRequest._timeoutRetryCount || 0;
-    if (isTimeout && retryCount < MAX_TIMEOUT_RETRIES) {
+    if (isTimeout && !originalRequest._skipTimeoutRetry && retryCount < MAX_TIMEOUT_RETRIES) {
       originalRequest._timeoutRetryCount = retryCount + 1;
       await new Promise((resolve) => setTimeout(resolve, 2000 * (retryCount + 1)));
       return apiClient(originalRequest);
@@ -115,9 +118,50 @@ export const uploadDocument = async (file, collectionId = null, onProgress) => {
   const { data } = await apiClient.post("/api/documents/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: onProgress,
+    timeout: UPLOAD_TIMEOUT_MS,
+    _skipTimeoutRetry: true,
+  });
+  return data;
+};
+
+export const fetchDocumentStatus = async (filename) => {
+  const { data } = await apiClient.get(`/api/documents/${encodeURIComponent(filename)}/status`, {
     timeout: LONG_RUNNING_TIMEOUT_MS,
   });
   return data;
+};
+
+export const waitForDocumentReady = async (filename, { onStage } = {}) => {
+  const deadline = Date.now() + INDEX_MAX_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    const status = await fetchDocumentStatus(filename);
+    if (status.status === "indexed") {
+      onStage?.("store");
+      return status;
+    }
+    if (status.status === "failed") {
+      throw new Error(status.error || "Document indexing failed on the server.");
+    }
+    onStage?.("index");
+    await new Promise((resolve) => setTimeout(resolve, INDEX_POLL_INTERVAL_MS));
+  }
+
+  throw new Error("Indexing is still running. Check the Documents page in a few minutes.");
+};
+
+export const uploadDocumentAndWait = async (file, collectionId = null, onProgress, onStage) => {
+  onStage?.("upload");
+  const result = await uploadDocument(file, collectionId, onProgress);
+  if (result.status === "indexed") {
+    return result;
+  }
+  if (result.status === "processing") {
+    onStage?.("index");
+    const finalStatus = await waitForDocumentReady(result.filename, { onStage });
+    return { ...result, ...finalStatus, status: "indexed" };
+  }
+  return result;
 };
 
 export const deleteDocument = async (filename) => {

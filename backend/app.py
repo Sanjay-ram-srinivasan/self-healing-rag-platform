@@ -51,6 +51,42 @@ logger = logging.getLogger(__name__)
 FALLBACK_MESSAGE = "I couldn't find enough relevant information in the uploaded documents to answer this question confidently."
 
 
+def _save_uploaded_file(source, destination: str) -> int:
+    with open(destination, "wb") as buffer:
+        shutil.copyfileobj(source, buffer)
+    return os.path.getsize(destination)
+
+
+async def _process_document_indexing(file_path: str, filename: str, file_meta: dict):
+    """Parse, chunk, and embed a document without blocking the upload HTTP response."""
+    try:
+        logger.info("[Upload] Background indexing started for %s", filename)
+        documents, chunks = await asyncio.to_thread(_index_document_file, file_path, filename, file_meta)
+        ocr_used = any(doc.metadata.get("ocr_used", False) for doc in documents)
+        updated_meta = {
+            **file_meta,
+            "pages": len(documents),
+            "chunks": len(chunks),
+            "ocr_used": ocr_used,
+            "status": "indexed",
+            "indexed_at": datetime.now().isoformat(),
+        }
+        save_document_meta(filename, updated_meta)
+        logger.info(
+            "[Upload] Background indexing completed for %s — %d pages, %d chunks.",
+            filename,
+            len(documents),
+            len(chunks),
+        )
+    except Exception as exc:
+        logger.error("[Upload] Background indexing failed for %s", filename, exc_info=True)
+        save_document_meta(filename, {
+            **file_meta,
+            "status": "failed",
+            "error": str(exc),
+        })
+
+
 def _index_document_file(file_path, filename, file_meta):
     documents = load_document(file_path)
     chunks = chunk_documents(documents)
@@ -205,9 +241,7 @@ async def upload_document(
 
     # 1. Write to local disk
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        file_size = os.path.getsize(file_path)
+        file_size = await asyncio.to_thread(_save_uploaded_file, file.file, file_path)
         logger.info("[Upload] Local copy saved. Size: %d bytes (%s KB)", file_size, round(file_size / 1024, 2))
     except Exception as e:
         logger.error("[Upload] Failed to write file locally: %s", file.filename, exc_info=True)
@@ -218,7 +252,8 @@ async def upload_document(
 
     # 2. Upload to Firebase Storage (required — this is the permanent store)
     logger.info("[Upload] Persisting %s to Firebase Storage...", file.filename)
-    if not upload_to_storage(file.filename):
+    storage_ok = await asyncio.to_thread(upload_to_storage, file.filename)
+    if not storage_ok:
         logger.error("[Upload] Firebase Storage upload failed for: %s", file.filename)
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -228,64 +263,21 @@ async def upload_document(
         )
     logger.info("[Upload] Firebase Storage upload successful: %s", file.filename)
 
-    # 3. Parse and index into Chroma
-    try:
-        logger.info("[Upload] Parsing file content: %s", file.filename)
-        documents = load_document(file_path)
-        logger.info("[Upload] Parsing completed. Loaded %d pages.", len(documents))
-
-        logger.info("[Upload] Chunking documents: %s", file.filename)
-        chunks = chunk_documents(documents)
-        logger.info("[Upload] Chunking completed. Generated %d chunks.", len(chunks))
-
-        for chunk in chunks:
-            chunk.metadata["user_id"] = current_user.uid
-            chunk.metadata["filename"] = file.filename
-            if collection_id:
-                chunk.metadata["collection_id"] = collection_id
-
-        logger.info("[Upload] Indexing %d chunks into ChromaDB...", len(chunks))
-        store_documents(chunks)
-        logger.info("[Upload] ChromaDB indexing completed.")
-    except ValueError as val_err:
-        logger.warning("[Upload] Validation/OCR error during parsing: %s", str(val_err))
-        # Roll back Storage upload and local file
-        delete_from_storage(file.filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(
-            status_code=400,
-            detail=str(val_err)
-        )
-    except Exception as exc:
-        logger.error("[Upload] Unexpected error during indexing: %s", file.filename, exc_info=True)
-        # Roll back Storage upload and local file
-        delete_from_storage(file.filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process and index document content: {str(exc)}"
-        )
-
-    # 4. Save per-document metadata to Firestore
-    ocr_used = any(doc.metadata.get("ocr_used", False) for doc in documents)
     file_meta = {
         "filename": file.filename,
-        "pages": len(documents),
-        "chunks": len(chunks),
+        "pages": 0,
+        "chunks": 0,
         "collection_id": collection_id,
-        "ocr_used": ocr_used,
+        "ocr_used": False,
         "user_id": current_user.uid,
         "size_bytes": file_size,
         "uploaded_at": datetime.now().isoformat(),
-        "status": "indexed",
+        "status": "processing",
     }
-    
+
     logger.info("[Upload] Saving document metadata to Firestore: %s", file_meta)
     if not save_document_meta(file.filename, file_meta):
         logger.error("[Upload] Firestore metadata update failed for: %s", file.filename)
-        # Metadata failed — roll back Storage upload and local file
         delete_from_storage(file.filename)
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -294,20 +286,24 @@ async def upload_document(
             detail="Firestore is unavailable. Document metadata was not persisted.",
         )
 
+    asyncio.create_task(_process_document_indexing(file_path, file.filename, file_meta))
+
     logger.info(
-        "[Upload] %s uploaded by %s successfully — %d pages, %d chunks.",
-        file.filename, current_user.uid, len(documents), len(chunks),
+        "[Upload] %s accepted by %s — queued for background indexing (%s KB).",
+        file.filename,
+        current_user.uid,
+        round(file_size / 1024, 2),
     )
     return {
-        "message": "Document uploaded and indexed successfully",
+        "message": "Document uploaded. Indexing in progress.",
         "filename": file.filename,
         "file_type": extension,
-        "pages": len(documents),
-        "chunks": len(chunks),
+        "pages": 0,
+        "chunks": 0,
         "size_bytes": file_size,
         "size_kb": round(file_size / 1024, 2),
         "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "indexed",
+        "status": "processing",
     }
 
 
@@ -383,6 +379,25 @@ def _build_documents_response(user_id: str):
     }
 
 
+@app.get("/api/documents/{filename}/status")
+@app.get("/documents/{filename}/status")
+async def get_document_status(
+    filename: str,
+    current_user: AuthenticatedUser = Depends(verify_firebase_token),
+):
+    file_meta = get_document_meta(filename)
+    if not file_meta or file_meta.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=404, detail="File not found or not authorized.")
+
+    return {
+        "filename": filename,
+        "status": file_meta.get("status", "unknown"),
+        "pages": file_meta.get("pages", 0),
+        "chunks": file_meta.get("chunks", 0),
+        "error": file_meta.get("error"),
+    }
+
+
 @app.delete("/api/documents/{filename}")
 @app.delete("/documents/{filename}")
 def delete_document(
@@ -415,7 +430,7 @@ def delete_document(
 
 
 @app.post("/api/documents/{filename}/reindex")
-def reindex_document(
+async def reindex_document(
     filename: str,
     current_user: AuthenticatedUser = Depends(verify_firebase_token),
 ):
@@ -427,24 +442,18 @@ def reindex_document(
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not on local disk; it will be restored on next startup.")
 
-    documents, chunks = _index_document_file(file_path, filename, file_meta)
-
-    updated_meta = {
+    processing_meta = {
         **file_meta,
-        "pages": len(documents),
-        "chunks": len(chunks),
-        "status": "indexed",
-        "reindexed_at": datetime.now().isoformat(),
+        "status": "processing",
+        "error": None,
     }
-    if not save_document_meta(filename, updated_meta):
-        logger.warning("[Reindex] Firestore metadata update failed for %s.", filename)
+    save_document_meta(filename, processing_meta)
+    asyncio.create_task(_process_document_indexing(file_path, filename, processing_meta))
 
     return {
-        "message": f"{filename} re-indexed successfully",
+        "message": f"{filename} queued for re-indexing",
         "filename": filename,
-        "pages": len(documents),
-        "chunks": len(chunks),
-        "status": "indexed",
+        "status": "processing",
     }
 
 

@@ -22,7 +22,7 @@ import {
   Plus,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
-import { askQuestion, fetchChats, searchChats, createChat, fetchChat, deleteChat, updateChat, fetchCollections, uploadDocument, fetchDocuments } from "../services/api.js";
+import { askQuestion, fetchChats, searchChats, createChat, fetchChat, deleteChat, updateChat, fetchCollections, uploadDocumentAndWait, fetchDocuments } from "../services/api.js";
 import StatusPill from "../components/StatusPill.jsx";
 
 function formatChatTimestamp(timestamp) {
@@ -200,12 +200,13 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
     setError("");
     try {
       for (const file of files) {
-        setUploadStatus({ stage: 'upload', fileName: file.name });
-        const result = await uploadDocument(file, selectedCollection === "all" ? null : selectedCollection);
+        const result = await uploadDocumentAndWait(
+          file,
+          selectedCollection === "all" ? null : selectedCollection,
+          null,
+          (stage) => setUploadStatus({ stage, fileName: file.name }),
+        );
         if (result.error) throw new Error(result.error);
-        setUploadStatus({ stage: 'store', fileName: file.name });
-        // Give a brief moment for the store to settle before refreshing
-        await new Promise(resolve => setTimeout(resolve, 600));
       }
       if (onDocumentUpload) {
         await onDocumentUpload();

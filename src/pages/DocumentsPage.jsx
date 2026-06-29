@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { Database, Eye, FileText, Filter, Loader2, MoreVertical, RefreshCw, Search, Trash2, Upload, X } from "lucide-react";
 import Footer from "../components/Footer.jsx";
 import StatusPill from "../components/StatusPill.jsx";
-import { deleteDocument, reindexDocument, uploadDocument, fetchCollections, createCollection, deleteCollection } from "../services/api.js";
+import { deleteDocument, reindexDocument, uploadDocumentAndWait, waitForDocumentReady, fetchCollections, createCollection, deleteCollection } from "../services/api.js";
 
 const allowedTypes = ".pdf,.docx,.pptx,.xlsx,.csv,.txt";
 
@@ -87,11 +87,18 @@ export default function DocumentsPage({ documents, loading, error, onRefresh }) 
     setUploadProgress(0);
     setActionError("");
     try {
-      const result = await uploadDocument(file, selectedUploadCollection || null, (progressEvent) => {
-        if (progressEvent.total) {
-          setUploadProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-        }
-      });
+      const result = await uploadDocumentAndWait(
+        file,
+        selectedUploadCollection || null,
+        (progressEvent) => {
+          if (progressEvent.total) {
+            setUploadProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
+          }
+        },
+        (stage) => {
+          if (stage === "index") setUploadProgress(100);
+        },
+      );
       if (result.error) throw new Error(result.error);
       await onRefresh();
     } catch (uploadError) {
@@ -122,6 +129,9 @@ export default function DocumentsPage({ documents, loading, error, onRefresh }) 
     try {
       const result = await reindexDocument(filename);
       if (result.error) throw new Error(result.error);
+      if (result.status === "processing") {
+        await waitForDocumentReady(filename);
+      }
       await onRefresh();
     } catch (reindexError) {
       setActionError(reindexError.response?.data?.detail || reindexError.message || "Re-index failed.");
@@ -316,7 +326,9 @@ export default function DocumentsPage({ documents, loading, error, onRefresh }) 
                         <td className="px-6 py-5 text-sm font-semibold">{doc.chunks || 0}</td>
                         <td className="px-6 py-5">
                           <div className="flex items-center gap-2">
-                            <StatusPill status="indexed">Indexed</StatusPill>
+                            <StatusPill status={doc.status === "failed" ? "error" : doc.status === "processing" ? "processing" : "indexed"}>
+                              {doc.status === "failed" ? "Failed" : doc.status === "processing" ? "Indexing" : "Indexed"}
+                            </StatusPill>
                             {doc.ocr_used && <span className="rounded bg-indigo-50 px-2 py-1 text-[10px] font-black text-indigo-700">OCR</span>}
                           </div>
                         </td>
