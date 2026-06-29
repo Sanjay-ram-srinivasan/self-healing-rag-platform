@@ -43,7 +43,6 @@ export default function AnalyticsPage({ documentsCount }) {
     const load = async () => {
       setLoading(true);
       setError("");
-      setAnalytics(null);
       try {
         const range = dateRange;
         let start = null;
@@ -57,7 +56,10 @@ export default function AnalyticsPage({ documentsCount }) {
           end = customRange.end;
         }
         const data = await fetchAnalytics(range, start, end);
-        if (mounted) setAnalytics(data);
+        if (mounted) {
+          setAnalytics(data);
+          setError("");
+        }
       } catch (apiError) {
         if (mounted) setError(apiError.response?.data?.detail || apiError.message || "Unable to load analytics.");
       } finally {
@@ -65,8 +67,17 @@ export default function AnalyticsPage({ documentsCount }) {
       }
     };
     load();
+
+    const interval = window.setInterval(load, 30000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       mounted = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [dateRange, customRange.start, customRange.end]);
 
@@ -88,7 +99,26 @@ export default function AnalyticsPage({ documentsCount }) {
   }, [liveOpen]);
 
   const metrics = analytics || {};
-  const totalQueries = Number(metrics.total_queries || metrics.questions_asked || 0);
+  const history = metrics.history ?? [];
+
+  const historyTotals = useMemo(
+    () => history.reduce(
+      (acc, day) => ({
+        questions: acc.questions + Number(day.questions || 0),
+        retries: acc.retries + Number(day.retries || 0),
+        hallucinations: acc.hallucinations + Number(day.hallucinations || 0),
+      }),
+      { questions: 0, retries: 0, hallucinations: 0 },
+    ),
+    [history],
+  );
+
+  const totalQueries = Number(
+    metrics.total_queries
+    || metrics.questions_asked
+    || historyTotals.questions
+    || 0,
+  );
   const avgConfidence = Number(metrics.average_confidence || 0);
   const avgFaithfulness = Number(metrics.average_faithfulness || 0);
   const avgRelevance = Number(metrics.average_relevance || 0);
@@ -96,11 +126,24 @@ export default function AnalyticsPage({ documentsCount }) {
   const avgRecall = Number(metrics.average_recall || 0);
   const hallucinationRate = Number(metrics.hallucination_rate || 0);
   const retryRate = Number(metrics.retry_rate || 0);
-  const retryCount = Number(metrics.retry_count || 0);
-  const hallucinationCount = Number(metrics.hallucination_count || 0);
-  const reliableCount = Number(metrics.reliable_count || 0);
+  const hallucinationCount = Number(
+    metrics.hallucination_count
+    || metrics.failed_answers
+    || historyTotals.hallucinations
+    || 0,
+  );
+  const retryCount = Number(
+    metrics.retry_count
+    || metrics.retries
+    || historyTotals.retries
+    || 0,
+  );
+  const reliableCount = Number(
+    metrics.reliable_count
+    || metrics.verified_answers
+    || Math.max(totalQueries - hallucinationCount, 0),
+  );
   const indexedDocuments = Number(metrics.documents_indexed ?? documentsCount ?? 0);
-  const history = metrics.history ?? [];
 
   const overviewChart = useMemo(
     () => ([
@@ -121,10 +164,13 @@ export default function AnalyticsPage({ documentsCount }) {
     [avgRelevance, avgPrecision, avgRecall],
   );
 
-  const pieData = [
-    { name: "Reliable", value: reliableCount },
-    { name: "Hallucination Risk", value: hallucinationCount },
-  ].filter((item) => item.value > 0);
+  const pieData = useMemo(() => {
+    if (totalQueries === 0) return [];
+    return [
+      { name: "Reliable", value: reliableCount },
+      { name: "Hallucination Risk", value: hallucinationCount },
+    ].filter((item) => item.value > 0);
+  }, [totalQueries, reliableCount, hallucinationCount]);
 
   return (
     <>
@@ -256,7 +302,7 @@ export default function AnalyticsPage({ documentsCount }) {
                 {pieData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={96}>
+                      <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={96} label={({ name, value }) => `${name}: ${value}`}>
                         {pieData.map((entry) => (
                           <Cell key={entry.name} fill={entry.name === "Reliable" ? "#C84B2F" : "#6A2A05"} />
                         ))}
@@ -293,19 +339,23 @@ export default function AnalyticsPage({ documentsCount }) {
             <div className="rounded-lg border border-line bg-paper p-6">
               <h2 className="text-xl font-black">Self-Healing Timeline</h2>
               <div className="mt-4 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={overviewChart}>
-                    <CartesianGrid stroke="#E2D8CF" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis tickLine={false} axisLine={false} />
-                    <Tooltip cursor={{ fill: "#F8F6F2" }} />
-                    <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-                      {overviewChart.map((entry) => (
-                        <Cell key={entry.name} fill={entry.name === "Hallucinations" ? "#6A2A05" : "#C84B2F"} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                {totalQueries > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={overviewChart} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid stroke="#E2D8CF" vertical={false} />
+                      <XAxis dataKey="name" tickLine={false} axisLine={false} interval={0} angle={-12} textAnchor="end" height={56} />
+                      <YAxis tickLine={false} axisLine={false} allowDecimals={false} />
+                      <Tooltip cursor={{ fill: "#F8F6F2" }} />
+                      <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                        {overviewChart.map((entry) => (
+                          <Cell key={entry.name} fill={entry.name === "Hallucinations" ? "#6A2A05" : "#C84B2F"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="grid h-full place-items-center text-sm text-muted">Ask a question in Chat to populate this chart.</div>
+                )}
               </div>
             </div>
             <div className="rounded-lg border border-line bg-[#FFFEFC] p-6">

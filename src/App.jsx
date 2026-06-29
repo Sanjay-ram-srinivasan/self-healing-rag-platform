@@ -118,8 +118,8 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-ivory text-ink">
-      <header className="sticky top-0 z-30 border-b border-line bg-ivory/95 backdrop-blur">
+    <div className={`bg-ivory text-ink ${activePage === "chat" ? "flex h-dvh flex-col overflow-hidden" : "min-h-screen"}`}>
+      <header className={`z-30 border-b border-line bg-ivory/95 backdrop-blur ${activePage === "chat" ? "shrink-0" : "sticky top-0"}`}>
         <div className="flex min-h-12 items-center justify-between px-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-5">
             <button
@@ -180,7 +180,9 @@ export default function App() {
           })}
         </nav>
       </header>
-      {page}
+      <div className={activePage === "chat" ? "min-h-0 flex-1 overflow-hidden" : undefined}>
+        {page}
+      </div>
     </div>
   );
 }

@@ -237,14 +237,13 @@ def _attempts(item):
 
 
 def is_hallucinated(item):
-    faithfulness = _score_value(item, "faithfulness")
     grounded = item.get("grounded")
-
     if grounded is False:
         return True
     if grounded is True:
-        return faithfulness is not None and faithfulness < 70
+        return False
 
+    faithfulness = _score_value(item, "faithfulness")
     return faithfulness is not None and faithfulness < 70
 
 

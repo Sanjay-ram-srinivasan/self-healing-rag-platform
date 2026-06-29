@@ -303,9 +303,9 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
   }, { pinned: [], today: [], yesterday: [], older: [] });
 
   return (
-    <div className="relative">
-    <main className="grid min-h-[calc(100vh-49px)] grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
-      <aside className="flex flex-col border-b border-line bg-[#FBFAF7] lg:border-b-0 lg:border-r">
+    <div className="relative h-full overflow-hidden">
+    <main className="grid h-full grid-cols-1 overflow-hidden lg:grid-cols-[280px_minmax(0,1fr)_300px]">
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden border-b border-line bg-[#FBFAF7] lg:border-b-0 lg:border-r">
         <div className="p-5">
             <button
               type="button"
@@ -364,7 +364,7 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
             aria-label="Search chats"
           />
         </div>
-        <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 space-y-6 scrollbar-soft">
            {chatsLoading ? (
              <p className="text-sm text-muted">Loading chats...</p>
            ) : chats.length === 0 ? (
@@ -472,8 +472,8 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
         </div>
       </aside>
 
-      <section className="flex min-h-[640px] flex-col border-b border-line lg:border-b-0">
-        <div className="scrollbar-soft flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden border-b border-line lg:border-b-0">
+        <div className="scrollbar-soft min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8">
           {messages.length === 0 && (
             <div className="mx-auto mt-12 max-w-xl text-center">
               <ShieldCheck className="mx-auto mb-4 text-accent" size={36} />
@@ -551,7 +551,7 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
             {error && <p className="rounded-lg bg-red-50 p-4 text-sm text-red-700">{error}</p>}
           </div>
         </div>
-        <form onSubmit={handleSubmit} className="border-t border-line bg-[#FBFAF7] p-5">
+        <form onSubmit={handleSubmit} className="shrink-0 border-t border-line bg-[#FBFAF7] p-5">
           <div className="mx-auto max-w-2xl rounded-xl border border-line bg-[#F1EEEB] p-2 shadow-soft flex items-center gap-2">
             <select
               value={selectedCollection}
@@ -584,7 +584,7 @@ export default function ChatPage({ currentChatId, setCurrentChatId, onDocumentUp
         </form>
       </section>
 
-      <aside className="bg-[#FBFAF7] p-6 lg:border-l lg:border-line">
+      <aside className="hidden h-full min-h-0 overflow-y-auto bg-[#FBFAF7] p-6 scrollbar-soft lg:block lg:border-l lg:border-line">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[#A18478]">Live Workflow</p>
         <p className="mt-2 text-xs font-semibold text-[#6A4034]">Self-Healing Cycle Logs</p>
         <div className="mt-8 space-y-5">
